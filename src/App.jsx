@@ -176,6 +176,11 @@ const CHART_COLORS = [
   '#4b5563',
 ];
 
+const MAX_GEMINI_INLINE_DATA_CHARS = 3_600_000;
+const IMAGE_TARGET_WIDTH = 1500;
+const IMAGE_MIN_WIDTH = 1200;
+const IMAGE_JPEG_QUALITY = 0.68;
+
 const normalizeString = (str) =>
   String(str || '')
     .replace(/\s/g, '')
@@ -255,15 +260,15 @@ const optimizeFile = async (file) => {
       img.src = event.target.result;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const maxWidth = 2500;
+        const maxWidth = IMAGE_TARGET_WIDTH;
         let width = img.width;
         let height = img.height;
 
         if (width > maxWidth) {
           height *= maxWidth / width;
           width = maxWidth;
-        } else if (width < 2200) {
-          const scale = 2200 / width;
+        } else if (width < IMAGE_MIN_WIDTH) {
+          const scale = IMAGE_MIN_WIDTH / width;
           width *= scale;
           height *= scale;
         }
@@ -314,11 +319,20 @@ const optimizeFile = async (file) => {
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         }
 
-        resolve({ data: canvas.toDataURL('image/jpeg', 0.9).split(',')[1], mimeType: 'image/jpeg' });
+        resolve({ data: canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY).split(',')[1], mimeType: 'image/jpeg' });
       };
     };
     reader.readAsDataURL(file);
   });
+};
+
+const assertPayloadSize = (optimizedContent, fileName) => {
+  if (optimizedContent.data.length > MAX_GEMINI_INLINE_DATA_CHARS) {
+    const mb = (optimizedContent.data.length / 1024 / 1024).toFixed(2);
+    throw new Error(
+      `${fileName} 파일이 압축 후에도 너무 큽니다. 현재 약 ${mb}MB입니다. PDF는 페이지별 이미지로 저장하거나 더 낮은 해상도의 이미지로 다시 업로드해 주세요.`,
+    );
+  }
 };
 
 const fetchWithRetry = async (url, options, retries = 3, backoff = 900) => {
@@ -787,10 +801,9 @@ export default function App() {
     }
 
     setIsAnalyzing(true);
-    setUploadStatus({ type: 'info', message: '초정밀 비전 스캔 가동: 성적표 테이블만 추출 중입니다...' });
+    setUploadStatus({ type: 'info', message: '초정밀 비전 스캔 가동: 파일을 1개씩 압축 분석 중입니다...' });
 
     try {
-      const optimizedContents = await Promise.all(stagedFiles.map((file) => optimizeFile(file.file)));
       const systemInstruction = `당신은 대한민국 고등학교 생활기록부 '교과학습발달상황' 내신성적표 전용 초정밀 데이터 추출 비전 AI입니다.
 오직 '교과학습발달상황' 하위의 [1학년], [2학년], [3학년] 성적 표 내부 데이터 행만 수집하십시오.
 인적학적사항, 출결상황, 수상경력, 창의적 체험활동상황, 독서활동상황, 행동특성 및 종합의견, 봉사활동실적, 세부능력 및 특기사항 등 성적 표가 아닌 영역은 모두 무시하십시오.
@@ -798,86 +811,101 @@ export default function App() {
 성취도나 등급이 P인 과목은 최종 배열에서 제외하십시오.
 교과는 국어, 수학, 영어, 사회, 과학, 한국사, 기타 중 하나로만 반환하십시오.`;
 
-      const payload = {
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: '세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.',
-              },
-              ...optimizedContents.map((content) => ({
-                inlineData: { mimeType: content.mimeType, data: content.data },
-              })),
-            ],
-          },
-        ],
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: 'application/json',
-          topP: 0.1,
-          maxOutputTokens: 8192,
-          responseSchema: {
-            type: 'OBJECT',
-            properties: {
-              detected_rows: { type: 'INTEGER' },
-              grades: {
-                type: 'ARRAY',
-                items: {
-                  type: 'OBJECT',
-                  properties: {
-                    semester: { type: 'STRING' },
-                    group: { type: 'STRING' },
-                    name: { type: 'STRING' },
-                    credits: { type: 'STRING' },
-                    score: { type: 'STRING' },
-                    mean: { type: 'STRING' },
-                    achievement: { type: 'STRING' },
-                    grade: { type: 'STRING' },
-                    studentCount: { type: 'STRING' },
+      const extractedGrades = [];
+
+      for (let index = 0; index < stagedFiles.length; index += 1) {
+        const stagedFile = stagedFiles[index];
+        setUploadStatus({
+          type: 'info',
+          message: `파일 분석 중 (${index + 1}/${stagedFiles.length}): ${stagedFile.name}`,
+        });
+
+        const optimizedContent = await optimizeFile(stagedFile.file);
+        assertPayloadSize(optimizedContent, stagedFile.name);
+
+        const payload = {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: '세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.',
+                },
+                {
+                  inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
+                },
+              ],
+            },
+          ],
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: 'application/json',
+            topP: 0.1,
+            maxOutputTokens: 8192,
+            responseSchema: {
+              type: 'OBJECT',
+              properties: {
+                detected_rows: { type: 'INTEGER' },
+                grades: {
+                  type: 'ARRAY',
+                  items: {
+                    type: 'OBJECT',
+                    properties: {
+                      semester: { type: 'STRING' },
+                      group: { type: 'STRING' },
+                      name: { type: 'STRING' },
+                      credits: { type: 'STRING' },
+                      score: { type: 'STRING' },
+                      mean: { type: 'STRING' },
+                      achievement: { type: 'STRING' },
+                      grade: { type: 'STRING' },
+                      studentCount: { type: 'STRING' },
+                    },
+                    required: ['semester', 'group', 'name'],
                   },
-                  required: ['semester', 'group', 'name'],
                 },
               },
             },
           },
-        },
-      };
+        };
 
-      const response = await fetchWithRetry('/api/gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const result = await response.json();
-      const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');
+        const response = await fetchWithRetry('/api/gemini', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const result = await response.json();
+        const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');
 
-      const parsedData = recoverJson(rawText);
-      if (!Array.isArray(parsedData.grades)) throw new Error('데이터 구조가 유효하지 않습니다.');
+        const parsedData = recoverJson(rawText);
+        if (!Array.isArray(parsedData.grades)) throw new Error('데이터 구조가 유효하지 않습니다.');
 
-      const mappedGrades = parsedData.grades
-        .filter((item) => {
-          if (!item.name) return false;
-          const achievement = String(item.achievement || '').toUpperCase().trim();
-          const grade = String(item.grade || '').toUpperCase().trim();
-          return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
-        })
-        .map(normalizeParsedGrade);
+        extractedGrades.push(
+          ...parsedData.grades
+            .filter((item) => {
+              if (!item.name) return false;
+              const achievement = String(item.achievement || '').toUpperCase().trim();
+              const grade = String(item.grade || '').toUpperCase().trim();
+              return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
+            })
+            .map(normalizeParsedGrade),
+        );
+      }
 
       setGrades((previous) => {
         const isInitialDummy = previous.length === 2 && previous[0].id === 1 && previous[1].id === 2;
-        if (isInitialDummy) return mappedGrades;
+        if (isInitialDummy) return extractedGrades;
 
         const existingKeys = new Set(previous.map((grade) => `${grade.semester}-${grade.name}`));
-        const uniqueNewGrades = mappedGrades.filter((grade) => !existingKeys.has(`${grade.semester}-${grade.name}`));
+        const uniqueNewGrades = extractedGrades.filter((grade) => !existingKeys.has(`${grade.semester}-${grade.name}`));
         return [...previous, ...uniqueNewGrades];
       });
 
       setUploadStatus({
         type: 'success',
-        message: `분석 완료: ${mappedGrades.length}개의 데이터가 추출되었습니다. 누락분은 같은 파일 상태에서 다시 이어서 파싱할 수 있습니다.`,
+        message: `분석 완료: ${extractedGrades.length}개의 데이터가 추출되었습니다. 누락분은 같은 파일 상태에서 다시 이어서 파싱할 수 있습니다.`,
       });
     } catch (error) {
       setUploadStatus({ type: 'error', message: `분석 오류: ${error.message}` });
