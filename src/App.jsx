@@ -429,40 +429,17 @@ const recoverJson = (text) => {
   }
 };
 
-const getSemesterParts = (semester) => {
-  const match = String(semester || '').match(/([1-3])\D*([1-2])\D*/);
-  return match ? { year: Number(match[1]), term: Number(match[2]) } : null;
-};
-
-const normalizeSemesterValue = (item, fallbackSemester = '1학년 1학기') => {
-  const semesterText = String(item.semester || '').trim();
-  const yearText = String(item.gradeYear || item.year || item.schoolYear || '').trim();
-  const termText = String(item.term || item.semesterTerm || '').trim();
-  const combinedText = `${yearText} ${semesterText} ${termText}`.trim();
-
-  const directMatch = combinedText.match(/([1-3])\D*([1-2])\D*/);
-  if (directMatch) return `${directMatch[1]}학년 ${directMatch[2]}학기`;
-
-  const found = SEMESTERS.find((value) => normalizeString(value) === normalizeString(semesterText));
-  if (found) return found;
-
-  const yearMatch = yearText.match(/[1-3]/);
-  const termMatch = combinedText.match(/([1-2])\D*학기|([1-2])\D*$/);
-  const term = termMatch ? Number(termMatch[1] || termMatch[2]) : null;
-  if (yearMatch && term) return `${yearMatch[0]}학년 ${term}학기`;
-
-  if (term) {
-    const previous = getSemesterParts(fallbackSemester) || { year: 1, term: 1 };
-    const year = term === 1 && previous.term === 2 ? Math.min(previous.year + 1, 3) : previous.year;
-    return `${year}학년 ${term}학기`;
-  }
-
-  return fallbackSemester;
-};
-
-const normalizeParsedGrade = (item, index, fallbackSemester) => {
+const normalizeParsedGrade = (item, index) => {
   let subjName = item.name ? String(item.name).trim() : '인식불가과목';
-  const semester = normalizeSemesterValue(item, fallbackSemester);
+  let semester = String(item.semester || '').trim();
+  const semesterMatch = semester.match(/([1-3])[^\d]*([1-2])[^\d]*/);
+
+  if (semesterMatch) {
+    semester = `${semesterMatch[1]}학년 ${semesterMatch[2]}학기`;
+  } else {
+    const found = SEMESTERS.find((value) => normalizeString(value).includes(normalizeString(semester)));
+    semester = found || '1학년 1학기';
+  }
 
   const big6 = ['국어', '수학', '영어', '사회', '과학', '한국사'];
   const parsedGroup = normalizeString(item.group || '');
@@ -882,15 +859,7 @@ export default function App() {
 성취도나 등급이 P인 과목은 최종 배열에서 제외하십시오.
 교과는 국어, 수학, 영어, 사회, 과학, 한국사, 기타 중 하나로만 반환하십시오.`;
 
-      const semesterInstruction = `
-학년/학기 추출은 반드시 원문 표의 상위 섹션 문맥을 따라야 합니다.
-각 행의 semester는 반드시 "1학년 1학기", "1학년 2학기", "2학년 1학기", "2학년 2학기", "3학년 1학기", "3학년 2학기" 중 하나로만 반환하십시오.
-표가 [2학년] 또는 [3학년] 영역 아래에 있으면 과목 행에 학년 문자가 반복되지 않아도 해당 학년을 유지하십시오.
-절대로 학년을 모른다는 이유로 1학년으로 기본값 처리하지 마십시오.
-가능하면 gradeYear에는 "1학년"/"2학년"/"3학년", term에는 "1학기"/"2학기"를 함께 반환하십시오.`;
-
       const extractedGrades = [];
-      let lastResolvedSemester = '1학년 1학기';
 
       for (let index = 0; index < stagedFiles.length; index += 1) {
         const stagedFile = stagedFiles[index];
@@ -923,7 +892,7 @@ export default function App() {
                 ],
               },
             ],
-            systemInstruction: { parts: [{ text: `${systemInstruction}\n${semesterInstruction}` }] },
+            systemInstruction: { parts: [{ text: systemInstruction }] },
             generationConfig: {
               temperature: 0,
               responseMimeType: 'application/json',
@@ -939,8 +908,6 @@ export default function App() {
                       type: 'OBJECT',
                       properties: {
                         semester: { type: 'STRING' },
-                        gradeYear: { type: 'STRING' },
-                        term: { type: 'STRING' },
                         group: { type: 'STRING' },
                         name: { type: 'STRING' },
                         credits: { type: 'STRING' },
@@ -970,18 +937,16 @@ export default function App() {
           const parsedData = recoverJson(rawText);
           if (!Array.isArray(parsedData.grades)) throw new Error('데이터 구조가 유효하지 않습니다.');
 
-          parsedData.grades
-            .filter((item) => {
-              if (!item.name) return false;
-              const achievement = String(item.achievement || '').toUpperCase().trim();
-              const grade = String(item.grade || '').toUpperCase().trim();
-              return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
-            })
-            .forEach((item) => {
-              const normalizedGrade = normalizeParsedGrade(item, extractedGrades.length, lastResolvedSemester);
-              lastResolvedSemester = normalizedGrade.semester;
-              extractedGrades.push(normalizedGrade);
-            });
+          extractedGrades.push(
+            ...parsedData.grades
+              .filter((item) => {
+                if (!item.name) return false;
+                const achievement = String(item.achievement || '').toUpperCase().trim();
+                const grade = String(item.grade || '').toUpperCase().trim();
+                return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
+              })
+              .map(normalizeParsedGrade),
+          );
         }
       }
 
