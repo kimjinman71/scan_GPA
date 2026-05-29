@@ -274,25 +274,50 @@ const parseSemesterParts = (semester) => {
 
 const repairSemesterSequence = (items) => {
   let currentYear = 1;
-  let previousTerm = null;
+  let currentTerm = null;
+  const seenSubjectsInTerm = new Set();
 
   return items.map((item) => {
     const parts = parseSemesterParts(item.semester);
     if (!parts) return item;
+    const subjectKey = normalizeString(item.name);
+    let nextTerm = parts.term;
 
-    if (previousTerm === 2 && parts.term === 1) {
-      currentYear = Math.min(currentYear + 1, 3);
+    if (currentTerm === null) {
+      currentTerm = nextTerm;
+    } else if (nextTerm !== currentTerm) {
+      if (currentTerm === 2 && nextTerm === 1) {
+        currentYear = Math.min(currentYear + 1, 3);
+      }
+      currentTerm = nextTerm;
+      seenSubjectsInTerm.clear();
+    } else if (seenSubjectsInTerm.has(subjectKey)) {
+      if (currentTerm === 1) {
+        currentTerm = 2;
+      } else {
+        currentYear = Math.min(currentYear + 1, 3);
+        currentTerm = 1;
+      }
+      nextTerm = currentTerm;
+      seenSubjectsInTerm.clear();
     }
 
     if (parts.year > currentYear && parts.year <= 3) {
       currentYear = parts.year;
     }
 
-    previousTerm = parts.term;
+    if (seenSubjectsInTerm.has(subjectKey) && currentTerm === 2) {
+      currentYear = Math.min(currentYear + 1, 3);
+      currentTerm = 1;
+      nextTerm = 1;
+      seenSubjectsInTerm.clear();
+    }
+
+    seenSubjectsInTerm.add(subjectKey);
 
     return {
       ...item,
-      semester: `${currentYear}${SCHOOL_YEAR_LABEL} ${parts.term}${SEMESTER_LABEL}`,
+      semester: `${currentYear}${SCHOOL_YEAR_LABEL} ${nextTerm}${SEMESTER_LABEL}`,
     };
   });
 };
