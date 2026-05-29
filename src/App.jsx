@@ -250,14 +250,20 @@ const canvasToInlineData = (canvas) => ({
   mimeType: 'image/jpeg',
 });
 
+const SCHOOL_YEAR_LABEL = '\uD559\uB144';
+const SEMESTER_LABEL = '\uD559\uAE30';
+const schoolYearPattern = new RegExp(`([1-3])\\s*${SCHOOL_YEAR_LABEL}`);
+const detectedYearPattern = new RegExp(`([1-3])\\s*${SCHOOL_YEAR_LABEL}|^\\s*([1-3])\\s*$`);
+const semesterTermPattern = new RegExp(`([1-2])\\s*${SEMESTER_LABEL}|^\\s*([1-2])\\s*$`);
+
 const detectSchoolYear = (text) => {
   const normalized = normalizeString(text);
-  const match = normalized.match(/([1-3])학년/);
+  const match = normalized.match(schoolYearPattern);
   return match ? Number(match[1]) : null;
 };
 
 const parseDetectedYear = (value) => {
-  const match = normalizeString(value).match(/([1-3])학년|^([1-3])$/);
+  const match = normalizeString(value).match(detectedYearPattern);
   return match ? Number(match[1] || match[2]) : null;
 };
 
@@ -452,13 +458,13 @@ const normalizeParsedGrade = (item, index, yearHint = null) => {
   const semesterMatch = semester.match(/([1-3])[^\d]*([1-2])[^\d]*/);
 
   if (semesterMatch) {
-    semester = `${yearHint || semesterMatch[1]}학년 ${semesterMatch[2]}학기`;
+    semester = `${yearHint || semesterMatch[1]}${SCHOOL_YEAR_LABEL} ${semesterMatch[2]}${SEMESTER_LABEL}`;
   } else {
-    const termMatch = semester.match(/([1-2])\s*학기|^([1-2])$/);
+    const termMatch = semester.match(semesterTermPattern);
     const term = termMatch ? Number(termMatch[1] || termMatch[2]) : null;
 
     if (yearHint && term) {
-      semester = `${yearHint}학년 ${term}학기`;
+      semester = `${yearHint}${SCHOOL_YEAR_LABEL} ${term}${SEMESTER_LABEL}`;
     } else {
       const found = SEMESTERS.find((value) => normalizeString(value).includes(normalizeString(semester)));
       semester = found || '1학년 1학기';
