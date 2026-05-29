@@ -322,6 +322,22 @@ const repairSemesterSequence = (items) => {
   });
 };
 
+const mapWithConcurrency = async (items, concurrency, mapper) => {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+};
+
 const optimizeImageElement = (img) => {
   const canvas = document.createElement('canvas');
   const maxWidth = IMAGE_TARGET_WIDTH;
@@ -946,18 +962,23 @@ export default function App() {
 
       const extractedGrades = [];
       let currentYearHint = null;
+      setUploadStatus({ type: 'info', message: `파일 최적화 중: ${stagedFiles.length}개 파일을 병렬 준비하고 있습니다...` });
+      const optimizedGroups = await Promise.all(
+        stagedFiles.map(async (stagedFile, fileIndex) => ({
+          stagedFile,
+          fileIndex,
+          optimizedContents: await optimizeFile(stagedFile.file),
+        })),
+      );
 
-      for (let index = 0; index < stagedFiles.length; index += 1) {
-        const stagedFile = stagedFiles[index];
+      for (let index = 0; index < optimizedGroups.length; index += 1) {
+        const { stagedFile, optimizedContents } = optimizedGroups[index];
         setUploadStatus({
           type: 'info',
           message: `파일 분석 중 (${index + 1}/${stagedFiles.length}): ${stagedFile.name}`,
         });
 
-        const optimizedContents = await optimizeFile(stagedFile.file);
-
-        for (let contentIndex = 0; contentIndex < optimizedContents.length; contentIndex += 1) {
-          const optimizedContent = optimizedContents[contentIndex];
+        const contentResults = await mapWithConcurrency(optimizedContents, 4, async (optimizedContent, contentIndex) => {
           const effectiveYearHint = optimizedContent.yearHint || currentYearHint;
           assertPayloadSize(optimizedContent, optimizedContent.label || stagedFile.name);
           setUploadStatus({
@@ -1038,6 +1059,10 @@ export default function App() {
               throw new Error('데이터 구조가 유효하지 않습니다.');
             }
           }
+          return { optimizedContent, parsedData, detectedYear };
+        });
+
+        contentResults.forEach(({ optimizedContent, parsedData, detectedYear }) => {
           if (detectedYear) currentYearHint = detectedYear;
           if (optimizedContent.yearHint) currentYearHint = optimizedContent.yearHint;
 
@@ -1051,7 +1076,7 @@ export default function App() {
               })
               .map((item, itemIndex) => normalizeParsedGrade(item, itemIndex, optimizedContent.yearHint || currentYearHint)),
           );
-        }
+        });
       }
 
       setGrades((previous) => {
