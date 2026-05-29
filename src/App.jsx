@@ -250,6 +250,12 @@ const canvasToInlineData = (canvas) => ({
   mimeType: 'image/jpeg',
 });
 
+const detectSchoolYear = (text) => {
+  const normalized = normalizeString(text);
+  const match = normalized.match(/([1-3])학년/);
+  return match ? Number(match[1]) : null;
+};
+
 const optimizeImageElement = (img) => {
   const canvas = document.createElement('canvas');
   const maxWidth = IMAGE_TARGET_WIDTH;
@@ -321,6 +327,9 @@ const optimizePdf = async (file) => {
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items.map((item) => item.str || '').join(' ');
+    const yearHint = detectSchoolYear(pageText);
     const baseViewport = page.getViewport({ scale: 1 });
     const scale = IMAGE_TARGET_WIDTH / baseViewport.width;
     const viewport = page.getViewport({ scale });
@@ -341,6 +350,7 @@ const optimizePdf = async (file) => {
     pages.push({
       ...canvasToInlineData(canvas),
       label: `${file.name} ${pageNumber}/${pdf.numPages}페이지`,
+      yearHint,
     });
   }
 
@@ -429,7 +439,7 @@ const recoverJson = (text) => {
   }
 };
 
-const normalizeParsedGrade = (item, index) => {
+const normalizeParsedGrade = (item, index, yearHint = null) => {
   let subjName = item.name ? String(item.name).trim() : '인식불가과목';
   let semester = String(item.semester || '').trim();
   const semesterMatch = semester.match(/([1-3])[^\d]*([1-2])[^\d]*/);
@@ -437,8 +447,15 @@ const normalizeParsedGrade = (item, index) => {
   if (semesterMatch) {
     semester = `${semesterMatch[1]}학년 ${semesterMatch[2]}학기`;
   } else {
-    const found = SEMESTERS.find((value) => normalizeString(value).includes(normalizeString(semester)));
-    semester = found || '1학년 1학기';
+    const termMatch = semester.match(/([1-2])\s*학기|^([1-2])$/);
+    const term = termMatch ? Number(termMatch[1] || termMatch[2]) : null;
+
+    if (yearHint && term) {
+      semester = `${yearHint}학년 ${term}학기`;
+    } else {
+      const found = SEMESTERS.find((value) => normalizeString(value).includes(normalizeString(semester)));
+      semester = found || '1학년 1학기';
+    }
   }
 
   const big6 = ['국어', '수학', '영어', '사회', '과학', '한국사'];
@@ -884,7 +901,7 @@ export default function App() {
                 role: 'user',
                 parts: [
                   {
-                    text: '세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.',
+                    text: `${optimizedContent.yearHint ? `이 페이지는 학생부의 [${optimizedContent.yearHint}학년] 영역입니다. semester의 학년은 반드시 ${optimizedContent.yearHint}학년으로 유지하세요.\n` : ''}세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.`,
                   },
                   {
                     inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
@@ -945,7 +962,7 @@ export default function App() {
                 const grade = String(item.grade || '').toUpperCase().trim();
                 return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
               })
-              .map(normalizeParsedGrade),
+              .map((item, itemIndex) => normalizeParsedGrade(item, itemIndex, optimizedContent.yearHint)),
           );
         }
       }
@@ -961,7 +978,7 @@ export default function App() {
 
       setUploadStatus({
         type: 'success',
-        message: `분석 완료: ${extractedGrades.length}개의 데이터가 추출되었습니다. 누락분은 같은 파일 상태에서 다시 이어서 파싱할 수 있습니다.`,
+        message: `분석 완료: ${extractedGrades.filter((grade) => grade.grade !== null).length}개의 데이터가 추출되었습니다. 누락분은 같은 파일 상태에서 다시 이어서 파싱할 수 있습니다.`,
       });
     } catch (error) {
       setUploadStatus({ type: 'error', message: `분석 오류: ${error.message}` });
