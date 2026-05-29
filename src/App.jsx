@@ -918,7 +918,14 @@ export default function App() {
                 ],
               },
             ],
-            systemInstruction: { parts: [{ text: systemInstruction }] },
+            systemInstruction: {
+              parts: [
+                {
+                  text: `${systemInstruction}
+학년 문맥만은 예외적으로 표 바깥의 [1학년], [2학년], [3학년] 제목도 읽어 detected_year에 반환하십시오. 다른 항목의 파싱 규칙은 기존 지시를 그대로 따르십시오.`,
+                },
+              ],
+            },
             generationConfig: {
               temperature: 0,
               responseMimeType: 'application/json',
