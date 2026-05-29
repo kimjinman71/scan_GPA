@@ -256,6 +256,11 @@ const detectSchoolYear = (text) => {
   return match ? Number(match[1]) : null;
 };
 
+const parseDetectedYear = (value) => {
+  const match = normalizeString(value).match(/([1-3])학년|^([1-3])$/);
+  return match ? Number(match[1] || match[2]) : null;
+};
+
 const optimizeImageElement = (img) => {
   const canvas = document.createElement('canvas');
   const maxWidth = IMAGE_TARGET_WIDTH;
@@ -324,12 +329,14 @@ const optimizePdf = async (file) => {
   const data = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data }).promise;
   const pages = [];
+  let currentYearHint = null;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const textContent = await page.getTextContent();
     const pageText = textContent.items.map((item) => item.str || '').join(' ');
     const yearHint = detectSchoolYear(pageText);
+    if (yearHint) currentYearHint = yearHint;
     const baseViewport = page.getViewport({ scale: 1 });
     const scale = IMAGE_TARGET_WIDTH / baseViewport.width;
     const viewport = page.getViewport({ scale });
@@ -350,7 +357,7 @@ const optimizePdf = async (file) => {
     pages.push({
       ...canvasToInlineData(canvas),
       label: `${file.name} ${pageNumber}/${pdf.numPages}페이지`,
-      yearHint,
+      yearHint: yearHint || currentYearHint,
     });
   }
 
@@ -445,7 +452,7 @@ const normalizeParsedGrade = (item, index, yearHint = null) => {
   const semesterMatch = semester.match(/([1-3])[^\d]*([1-2])[^\d]*/);
 
   if (semesterMatch) {
-    semester = `${semesterMatch[1]}학년 ${semesterMatch[2]}학기`;
+    semester = `${yearHint || semesterMatch[1]}학년 ${semesterMatch[2]}학기`;
   } else {
     const termMatch = semester.match(/([1-2])\s*학기|^([1-2])$/);
     const term = termMatch ? Number(termMatch[1] || termMatch[2]) : null;
@@ -877,6 +884,7 @@ export default function App() {
 교과는 국어, 수학, 영어, 사회, 과학, 한국사, 기타 중 하나로만 반환하십시오.`;
 
       const extractedGrades = [];
+      let currentYearHint = null;
 
       for (let index = 0; index < stagedFiles.length; index += 1) {
         const stagedFile = stagedFiles[index];
@@ -889,6 +897,7 @@ export default function App() {
 
         for (let contentIndex = 0; contentIndex < optimizedContents.length; contentIndex += 1) {
           const optimizedContent = optimizedContents[contentIndex];
+          const effectiveYearHint = optimizedContent.yearHint || currentYearHint;
           assertPayloadSize(optimizedContent, optimizedContent.label || stagedFile.name);
           setUploadStatus({
             type: 'info',
@@ -901,7 +910,7 @@ export default function App() {
                 role: 'user',
                 parts: [
                   {
-                    text: `${optimizedContent.yearHint ? `이 페이지는 학생부의 [${optimizedContent.yearHint}학년] 영역입니다. semester의 학년은 반드시 ${optimizedContent.yearHint}학년으로 유지하세요.\n` : ''}세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.`,
+                    text: `${effectiveYearHint ? `이 페이지는 학생부의 [${effectiveYearHint}학년] 영역입니다. semester의 학년은 반드시 ${effectiveYearHint}학년으로 유지하세요.\n` : ''}이미지에 [1학년], [2학년], [3학년] 제목만 보이면 detected_year에 해당 학년을 반환하세요. 세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.`,
                   },
                   {
                     inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
@@ -919,6 +928,7 @@ export default function App() {
                 type: 'OBJECT',
                 properties: {
                   detected_rows: { type: 'INTEGER' },
+                  detected_year: { type: 'STRING' },
                   grades: {
                     type: 'ARRAY',
                     items: {
@@ -952,7 +962,16 @@ export default function App() {
           if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');
 
           const parsedData = recoverJson(rawText);
-          if (!Array.isArray(parsedData.grades)) throw new Error('데이터 구조가 유효하지 않습니다.');
+          const detectedYear = parseDetectedYear(parsedData.detected_year);
+          if (!Array.isArray(parsedData.grades)) {
+            if (detectedYear) {
+              parsedData.grades = [];
+            } else {
+              throw new Error('데이터 구조가 유효하지 않습니다.');
+            }
+          }
+          if (detectedYear) currentYearHint = detectedYear;
+          if (optimizedContent.yearHint) currentYearHint = optimizedContent.yearHint;
 
           extractedGrades.push(
             ...parsedData.grades
@@ -962,7 +981,7 @@ export default function App() {
                 const grade = String(item.grade || '').toUpperCase().trim();
                 return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
               })
-              .map((item, itemIndex) => normalizeParsedGrade(item, itemIndex, optimizedContent.yearHint)),
+              .map((item, itemIndex) => normalizeParsedGrade(item, itemIndex, optimizedContent.yearHint || currentYearHint)),
           );
         }
       }
