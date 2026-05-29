@@ -273,7 +273,15 @@ const parseSemesterParts = (semester) => {
 };
 
 const repairSemesterSequence = (items) => {
-  let currentYear = 1;
+  const sequence = [
+    { year: 1, term: 1 },
+    { year: 1, term: 2 },
+    { year: 2, term: 1 },
+    { year: 2, term: 2 },
+    { year: 3, term: 1 },
+    { year: 3, term: 2 },
+  ];
+  let sequenceIndex = 0;
   let currentTerm = null;
   const seenSubjectsInTerm = new Set();
 
@@ -281,35 +289,19 @@ const repairSemesterSequence = (items) => {
     const parts = parseSemesterParts(item.semester);
     if (!parts) return item;
     const subjectKey = normalizeString(item.name);
-    let nextTerm = parts.term;
+    let current = sequence[sequenceIndex];
 
     if (currentTerm === null) {
-      currentTerm = nextTerm;
-    } else if (nextTerm !== currentTerm) {
-      if (currentTerm === 2 && nextTerm === 1) {
-        currentYear = Math.min(currentYear + 1, 3);
-      }
-      currentTerm = nextTerm;
+      currentTerm = current.term;
+    } else if (parts.term !== currentTerm) {
+      sequenceIndex = Math.min(sequenceIndex + 1, sequence.length - 1);
+      current = sequence[sequenceIndex];
+      currentTerm = current.term;
       seenSubjectsInTerm.clear();
     } else if (seenSubjectsInTerm.has(subjectKey)) {
-      if (currentTerm === 1) {
-        currentTerm = 2;
-      } else {
-        currentYear = Math.min(currentYear + 1, 3);
-        currentTerm = 1;
-      }
-      nextTerm = currentTerm;
-      seenSubjectsInTerm.clear();
-    }
-
-    if (parts.year > currentYear && parts.year <= 3) {
-      currentYear = parts.year;
-    }
-
-    if (seenSubjectsInTerm.has(subjectKey) && currentTerm === 2) {
-      currentYear = Math.min(currentYear + 1, 3);
-      currentTerm = 1;
-      nextTerm = 1;
+      sequenceIndex = Math.min(sequenceIndex + 1, sequence.length - 1);
+      current = sequence[sequenceIndex];
+      currentTerm = current.term;
       seenSubjectsInTerm.clear();
     }
 
@@ -317,7 +309,7 @@ const repairSemesterSequence = (items) => {
 
     return {
       ...item,
-      semester: `${currentYear}${SCHOOL_YEAR_LABEL} ${nextTerm}${SEMESTER_LABEL}`,
+      semester: `${current.year}${SCHOOL_YEAR_LABEL} ${current.term}${SEMESTER_LABEL}`,
     };
   });
 };
