@@ -267,6 +267,36 @@ const parseDetectedYear = (value) => {
   return match ? Number(match[1] || match[2]) : null;
 };
 
+const parseSemesterParts = (semester) => {
+  const match = normalizeString(semester).match(/([1-3])\D*([1-2])\D*/);
+  return match ? { year: Number(match[1]), term: Number(match[2]) } : null;
+};
+
+const repairSemesterSequence = (items) => {
+  let currentYear = 1;
+  let previousTerm = null;
+
+  return items.map((item) => {
+    const parts = parseSemesterParts(item.semester);
+    if (!parts) return item;
+
+    if (previousTerm === 2 && parts.term === 1) {
+      currentYear = Math.min(currentYear + 1, 3);
+    }
+
+    if (parts.year > currentYear && parts.year <= 3) {
+      currentYear = parts.year;
+    }
+
+    previousTerm = parts.term;
+
+    return {
+      ...item,
+      semester: `${currentYear}${SCHOOL_YEAR_LABEL} ${parts.term}${SEMESTER_LABEL}`,
+    };
+  });
+};
+
 const optimizeImageElement = (img) => {
   const canvas = document.createElement('canvas');
   const maxWidth = IMAGE_TARGET_WIDTH;
@@ -1000,11 +1030,12 @@ export default function App() {
       }
 
       setGrades((previous) => {
+        const repairedGrades = repairSemesterSequence(extractedGrades);
         const isInitialDummy = previous.length === 2 && previous[0].id === 1 && previous[1].id === 2;
-        if (isInitialDummy) return extractedGrades;
+        if (isInitialDummy) return repairedGrades;
 
         const existingKeys = new Set(previous.map((grade) => `${grade.semester}-${grade.name}`));
-        const uniqueNewGrades = extractedGrades.filter((grade) => !existingKeys.has(`${grade.semester}-${grade.name}`));
+        const uniqueNewGrades = repairedGrades.filter((grade) => !existingKeys.has(`${grade.semester}-${grade.name}`));
         return [...previous, ...uniqueNewGrades];
       });
 
