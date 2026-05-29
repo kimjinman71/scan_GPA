@@ -381,11 +381,18 @@ const fetchWithRetry = async (url, options, retries = 3, backoff = 900) => {
     const response = await fetch(url, options);
     if (!response.ok) {
       const body = await response.text();
+      const message = (() => {
+        try {
+          return JSON.parse(body)?.error?.message || body;
+        } catch {
+          return body;
+        }
+      })();
       if (retries > 0) {
         await new Promise((resolve) => setTimeout(resolve, backoff));
         return fetchWithRetry(url, options, retries - 1, backoff * 2);
       }
-      throw new Error(body || '분석 서버 응답 실패');
+      throw new Error(message || '분석 서버 응답 실패');
     }
     return response;
   } catch (error) {
@@ -922,7 +929,7 @@ export default function App() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
-          });
+          }, 0);
           const result = await response.json();
           const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
           if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');

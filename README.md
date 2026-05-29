@@ -10,9 +10,10 @@ Vercel 프로젝트의 Settings > Environment Variables에 아래 값을 등록�
 APP_PASSWORDS=0000,8405
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite,gemini-2.0-flash
 ```
 
-`APP_PASSWORDS`는 쉼표로 여러 개를 등록할 수 있습니다.
+`GEMINI_MODEL`이 일시적 과부하로 실패하면 서버 함수가 자동 재시도 후 `GEMINI_FALLBACK_MODELS`의 모델을 순서대로 시도합니다.
 
 ## 실행
 
@@ -21,4 +22,8 @@ npm install
 npm run build
 ```
 
-로컬에서 Vercel 서버리스 함수까지 함께 확인하려면 Vercel CLI의 `vercel dev` 사용을 권장합니다.
+로컬에서 API 라우트까지 함께 확인하려면:
+
+```bash
+npm run serve
+```
