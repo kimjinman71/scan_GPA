@@ -973,9 +973,12 @@ export default function App() {
         const contentResults = await mapWithConcurrency(optimizedContents, 4, async (optimizedContent, contentIndex) => {
           const effectiveYearHint = optimizedContent.yearHint || currentYearHint;
           assertPayloadSize(optimizedContent, optimizedContent.label || stagedFile.name);
+          const pageLabel = optimizedContent.label || stagedFile.name;
+          const pageMatch = pageLabel.match(/(\d+)\/(\d+)/);
+          const pageProgress = pageMatch ? `${pageMatch[1]}/${pageMatch[2]}페이지 (${Math.round((Number(pageMatch[1]) / Number(pageMatch[2])) * 100)}%)` : `${contentIndex + 1}/${optimizedContents.length}페이지 (${Math.round(((contentIndex + 1) / optimizedContents.length) * 100)}%)`;
           setUploadStatus({
             type: 'info',
-            message: `분석 요청 중 (${index + 1}/${stagedFiles.length}): ${optimizedContent.label || stagedFile.name}`,
+            message: `분석 요청 중: ${stagedFile.name} ${pageProgress}`,
           });
 
           const payload = {
@@ -1064,7 +1067,13 @@ export default function App() {
                 if (!item.name) return false;
                 const achievement = String(item.achievement || '').toUpperCase().trim();
                 const grade = String(item.grade || '').toUpperCase().trim();
-                return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
+                const numericGrade = parseNum(item.grade);
+                return (
+                  !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P')) &&
+                  numericGrade !== null &&
+                  numericGrade >= 1 &&
+                  numericGrade <= 9
+                );
               })
               .map((item, itemIndex) => normalizeParsedGrade(item, itemIndex, optimizedContent.yearHint || currentYearHint)),
           );
