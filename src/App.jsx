@@ -29,6 +29,10 @@ import {
   ResponsiveContainer,
   LabelList,
 } from 'recharts';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const SEMESTERS = [
   '1학년 1학기',
@@ -241,14 +245,111 @@ const getFormattedChartData = (region, isFiveGrade) =>
     color: CHART_COLORS[index % CHART_COLORS.length],
   }));
 
+const canvasToInlineData = (canvas) => ({
+  data: canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY).split(',')[1],
+  mimeType: 'image/jpeg',
+});
+
+const optimizeImageElement = (img) => {
+  const canvas = document.createElement('canvas');
+  const maxWidth = IMAGE_TARGET_WIDTH;
+  let width = img.width;
+  let height = img.height;
+
+  if (width > maxWidth) {
+    height *= maxWidth / width;
+    width = maxWidth;
+  } else if (width < IMAGE_MIN_WIDTH) {
+    const scale = IMAGE_MIN_WIDTH / width;
+    width *= scale;
+    height *= scale;
+  }
+
+  canvas.width = Math.round(width);
+  canvas.height = Math.round(height);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  try {
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = imgData.data;
+    const grayBuf = new Uint8ClampedArray(canvas.width * canvas.height);
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      grayBuf[i >> 2] = 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
+    }
+
+    for (let y = 1; y < canvas.height - 1; y += 1) {
+      const yOffset = y * canvas.width;
+      const yPrev = (y - 1) * canvas.width;
+      const yNext = (y + 1) * canvas.width;
+
+      for (let x = 1; x < canvas.width - 1; x += 1) {
+        const idx = yOffset + x;
+        const sharpened =
+          5 * grayBuf[idx] -
+          grayBuf[idx - 1] -
+          grayBuf[idx + 1] -
+          grayBuf[yPrev + x] -
+          grayBuf[yNext + x];
+        const finalVal = Math.max(0, Math.min(255, sharpened));
+        const contrastVal = finalVal > 135 ? Math.min(255, finalVal * 1.25) : Math.max(0, finalVal * 0.42);
+        const destIdx = idx << 2;
+        pixels[destIdx] = contrastVal;
+        pixels[destIdx + 1] = contrastVal;
+        pixels[destIdx + 2] = contrastVal;
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+  } catch {
+    ctx.filter = 'contrast(1.4) brightness(1.02) grayscale(1)';
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  }
+
+  return canvasToInlineData(canvas);
+};
+
+const optimizePdf = async (file) => {
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+  const pages = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const scale = IMAGE_TARGET_WIDTH / baseViewport.width;
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({
+      canvasContext: ctx,
+      viewport,
+      background: '#ffffff',
+    }).promise;
+
+    pages.push({
+      ...canvasToInlineData(canvas),
+      label: `${file.name} ${pageNumber}/${pdf.numPages}페이지`,
+    });
+  }
+
+  return pages;
+};
+
 const optimizeFile = async (file) => {
   if (file.type === 'application/pdf') {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve({ data: reader.result.split(',')[1], mimeType: 'application/pdf' });
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+    return optimizePdf(file);
   }
 
   return new Promise((resolve, reject) => {
@@ -259,67 +360,7 @@ const optimizeFile = async (file) => {
       img.onerror = reject;
       img.src = event.target.result;
       img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const maxWidth = IMAGE_TARGET_WIDTH;
-        let width = img.width;
-        let height = img.height;
-
-        if (width > maxWidth) {
-          height *= maxWidth / width;
-          width = maxWidth;
-        } else if (width < IMAGE_MIN_WIDTH) {
-          const scale = IMAGE_MIN_WIDTH / width;
-          width *= scale;
-          height *= scale;
-        }
-
-        canvas.width = Math.round(width);
-        canvas.height = Math.round(height);
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-        try {
-          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const pixels = imgData.data;
-          const grayBuf = new Uint8ClampedArray(canvas.width * canvas.height);
-
-          for (let i = 0; i < pixels.length; i += 4) {
-            grayBuf[i >> 2] = 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
-          }
-
-          for (let y = 1; y < canvas.height - 1; y += 1) {
-            const yOffset = y * canvas.width;
-            const yPrev = (y - 1) * canvas.width;
-            const yNext = (y + 1) * canvas.width;
-
-            for (let x = 1; x < canvas.width - 1; x += 1) {
-              const idx = yOffset + x;
-              const sharpened =
-                5 * grayBuf[idx] -
-                grayBuf[idx - 1] -
-                grayBuf[idx + 1] -
-                grayBuf[yPrev + x] -
-                grayBuf[yNext + x];
-              const finalVal = Math.max(0, Math.min(255, sharpened));
-              const contrastVal = finalVal > 135 ? Math.min(255, finalVal * 1.25) : Math.max(0, finalVal * 0.42);
-              const destIdx = idx << 2;
-              pixels[destIdx] = contrastVal;
-              pixels[destIdx + 1] = contrastVal;
-              pixels[destIdx + 2] = contrastVal;
-            }
-          }
-
-          ctx.putImageData(imgData, 0, 0);
-        } catch {
-          ctx.filter = 'contrast(1.4) brightness(1.02) grayscale(1)';
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        }
-
-        resolve({ data: canvas.toDataURL('image/jpeg', IMAGE_JPEG_QUALITY).split(',')[1], mimeType: 'image/jpeg' });
+        resolve([{ ...optimizeImageElement(img), label: file.name }]);
       };
     };
     reader.readAsDataURL(file);
@@ -820,78 +861,86 @@ export default function App() {
           message: `파일 분석 중 (${index + 1}/${stagedFiles.length}): ${stagedFile.name}`,
         });
 
-        const optimizedContent = await optimizeFile(stagedFile.file);
-        assertPayloadSize(optimizedContent, stagedFile.name);
+        const optimizedContents = await optimizeFile(stagedFile.file);
 
-        const payload = {
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  text: '세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.',
-                },
-                {
-                  inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
-                },
-              ],
-            },
-          ],
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: 'application/json',
-            topP: 0.1,
-            maxOutputTokens: 8192,
-            responseSchema: {
-              type: 'OBJECT',
-              properties: {
-                detected_rows: { type: 'INTEGER' },
-                grades: {
-                  type: 'ARRAY',
-                  items: {
-                    type: 'OBJECT',
-                    properties: {
-                      semester: { type: 'STRING' },
-                      group: { type: 'STRING' },
-                      name: { type: 'STRING' },
-                      credits: { type: 'STRING' },
-                      score: { type: 'STRING' },
-                      mean: { type: 'STRING' },
-                      achievement: { type: 'STRING' },
-                      grade: { type: 'STRING' },
-                      studentCount: { type: 'STRING' },
+        for (let contentIndex = 0; contentIndex < optimizedContents.length; contentIndex += 1) {
+          const optimizedContent = optimizedContents[contentIndex];
+          assertPayloadSize(optimizedContent, optimizedContent.label || stagedFile.name);
+          setUploadStatus({
+            type: 'info',
+            message: `분석 요청 중 (${index + 1}/${stagedFiles.length}): ${optimizedContent.label || stagedFile.name}`,
+          });
+
+          const payload = {
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text: '세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.',
+                  },
+                  {
+                    inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
+                  },
+                ],
+              },
+            ],
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            generationConfig: {
+              temperature: 0,
+              responseMimeType: 'application/json',
+              topP: 0.1,
+              maxOutputTokens: 8192,
+              responseSchema: {
+                type: 'OBJECT',
+                properties: {
+                  detected_rows: { type: 'INTEGER' },
+                  grades: {
+                    type: 'ARRAY',
+                    items: {
+                      type: 'OBJECT',
+                      properties: {
+                        semester: { type: 'STRING' },
+                        group: { type: 'STRING' },
+                        name: { type: 'STRING' },
+                        credits: { type: 'STRING' },
+                        score: { type: 'STRING' },
+                        mean: { type: 'STRING' },
+                        achievement: { type: 'STRING' },
+                        grade: { type: 'STRING' },
+                        studentCount: { type: 'STRING' },
+                      },
+                      required: ['semester', 'group', 'name'],
                     },
-                    required: ['semester', 'group', 'name'],
                   },
                 },
               },
             },
-          },
-        };
+          };
 
-        const response = await fetchWithRetry('/api/gemini', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const result = await response.json();
-        const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');
+          const response = await fetchWithRetry('/api/gemini', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json();
+          const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');
 
-        const parsedData = recoverJson(rawText);
-        if (!Array.isArray(parsedData.grades)) throw new Error('데이터 구조가 유효하지 않습니다.');
+          const parsedData = recoverJson(rawText);
+          if (!Array.isArray(parsedData.grades)) throw new Error('데이터 구조가 유효하지 않습니다.');
 
-        extractedGrades.push(
-          ...parsedData.grades
-            .filter((item) => {
-              if (!item.name) return false;
-              const achievement = String(item.achievement || '').toUpperCase().trim();
-              const grade = String(item.grade || '').toUpperCase().trim();
-              return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
-            })
-            .map(normalizeParsedGrade),
-        );
+          extractedGrades.push(
+            ...parsedData.grades
+              .filter((item) => {
+                if (!item.name) return false;
+                const achievement = String(item.achievement || '').toUpperCase().trim();
+                const grade = String(item.grade || '').toUpperCase().trim();
+                return !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P'));
+              })
+              .map(normalizeParsedGrade),
+          );
+        }
       }
 
       setGrades((previous) => {
