@@ -273,43 +273,24 @@ const parseSemesterParts = (semester) => {
 };
 
 const repairSemesterSequence = (items) => {
-  const sequence = [
-    { year: 1, term: 1 },
-    { year: 1, term: 2 },
-    { year: 2, term: 1 },
-    { year: 2, term: 2 },
-    { year: 3, term: 1 },
-    { year: 3, term: 2 },
-  ];
-  let sequenceIndex = 0;
-  let currentTerm = null;
-  const seenSubjectsInTerm = new Set();
+  let currentYear = 1;
+  let previousTerm = null;
 
   return items.map((item) => {
     const parts = parseSemesterParts(item.semester);
     if (!parts) return item;
-    const subjectKey = normalizeString(item.name);
-    let current = sequence[sequenceIndex];
 
-    if (currentTerm === null) {
-      currentTerm = current.term;
-    } else if (parts.term !== currentTerm) {
-      sequenceIndex = Math.min(sequenceIndex + 1, sequence.length - 1);
-      current = sequence[sequenceIndex];
-      currentTerm = current.term;
-      seenSubjectsInTerm.clear();
-    } else if (seenSubjectsInTerm.has(subjectKey)) {
-      sequenceIndex = Math.min(sequenceIndex + 1, sequence.length - 1);
-      current = sequence[sequenceIndex];
-      currentTerm = current.term;
-      seenSubjectsInTerm.clear();
+    if (parts.year > currentYear) {
+      currentYear = Math.min(parts.year, 3);
+    } else if (previousTerm === 2 && parts.term === 1) {
+      currentYear = Math.min(currentYear + 1, 3);
     }
 
-    seenSubjectsInTerm.add(subjectKey);
+    previousTerm = parts.term;
 
     return {
       ...item,
-      semester: `${current.year}${SCHOOL_YEAR_LABEL} ${current.term}${SEMESTER_LABEL}`,
+      semester: `${currentYear}${SCHOOL_YEAR_LABEL} ${parts.term}${SEMESTER_LABEL}`,
     };
   });
 };
@@ -987,7 +968,7 @@ export default function App() {
                 role: 'user',
                 parts: [
                   {
-                    text: `${effectiveYearHint ? `이 페이지는 학생부의 [${effectiveYearHint}학년] 영역입니다. semester의 학년은 반드시 ${effectiveYearHint}학년으로 유지하세요.\n` : ''}이미지에 [1학년], [2학년], [3학년] 제목만 보이면 detected_year에 해당 학년을 반환하세요. 세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 빈칸에 가짜 숫자를 넣지 마세요.`,
+                    text: `${effectiveYearHint ? `이 페이지는 학생부의 [${effectiveYearHint}학년] 영역입니다. 표의 학기 열 값 1은 ${effectiveYearHint}학년 1학기, 학기 열 값 2는 ${effectiveYearHint}학년 2학기로 매핑하세요.\n` : ''}이미지에 [1학년], [2학년], [3학년] 제목만 보이면 detected_year에 해당 학년을 반환하세요. 세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 석차등급이 비어 있거나 P이거나 1~9 숫자가 아닌 행은 반환하지 마세요. 빈칸에 가짜 숫자를 넣지 마세요.`,
                   },
                   {
                     inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
@@ -999,7 +980,8 @@ export default function App() {
               parts: [
                 {
                   text: `${systemInstruction}
-학년 문맥만은 예외적으로 표 바깥의 [1학년], [2학년], [3학년] 제목도 읽어 detected_year에 반환하십시오. 다른 항목의 파싱 규칙은 기존 지시를 그대로 따르십시오.`,
+학년 문맥만은 예외적으로 표 바깥의 [1학년], [2학년], [3학년] 제목도 읽어 detected_year에 반환하십시오. 다른 항목의 파싱 규칙은 기존 지시를 그대로 따르십시오.
+석차등급이 null, 빈칸, P, 또는 1~9 숫자가 아닌 과목 행은 grades 배열에 포함하지 마십시오.`,
                 },
               ],
             },
