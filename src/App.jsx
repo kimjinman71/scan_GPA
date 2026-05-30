@@ -32,8 +32,6 @@ import {
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-// 김진만
-
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const SEMESTERS = [
