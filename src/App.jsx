@@ -835,14 +835,14 @@ function UniversityChart({ userGrade, data, title, isFiveGrade }) {
         <div className="relative inline-flex h-[320px] min-w-full items-end gap-3 px-10">
           {isValid && (
             <div
-              className="pointer-events-none absolute z-20 border-t-2 border-dashed border-rose-300 transition-all duration-500"
+              className="pointer-events-none absolute z-20 border-t-2 border-dashed border-red-500 transition-all duration-500"
               style={{
                 bottom: `${Math.max(0, Math.min(280, (1 - (gpa - chartMin) / range) * 280 + 35))}px`,
                 left: '40px',
                 width: `${chartContentWidth}px`,
               }}
             >
-              <div className="absolute left-[-5px] top-0 z-30 flex -translate-y-1/2 items-center gap-2 whitespace-nowrap bg-rose-400 px-2 py-1 text-[10px] font-black text-white shadow-lg shadow-rose-100">
+              <div className="absolute left-[-5px] top-0 z-30 flex -translate-y-1/2 items-center gap-2 whitespace-nowrap bg-red-600 px-2 py-1 text-[10px] font-black text-white shadow-lg">
                 내위치 <span>{gpa.toFixed(2)}</span>
               </div>
             </div>
@@ -855,10 +855,10 @@ function UniversityChart({ userGrade, data, title, isFiveGrade }) {
               <div key={univ.name} className="group relative flex shrink-0 flex-col items-center" style={{ width: '55px' }}>
                 <div className="relative flex h-[280px] w-10 flex-col justify-end overflow-hidden bg-slate-50 shadow-inner ring-1 ring-slate-100">
                   <div
-                    className="absolute w-full shadow-sm transition-all duration-700"
+                    className="absolute left-1/2 w-7 -translate-x-1/2 rounded-[5px] shadow-sm transition-all duration-700"
                     style={{
                       bottom: `${barBottom}px`,
-                      height: `${barHeight}px`,
+                      height: `${Math.max(12, Math.min(barHeight, 42))}px`,
                       backgroundColor: univ.color,
                       opacity: 0.92,
                     }}
