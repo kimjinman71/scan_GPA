@@ -167,21 +167,21 @@ const REGION_DATA = {
 };
 
 const CHART_COLORS = [
-  '#ff5f5f',
-  '#ffbd2e',
-  '#27c93f',
-  '#3b82f6',
-  '#a855f7',
-  '#94a3b8',
-  '#0ea5e9',
-  '#ef4444',
-  '#f59e0b',
-  '#10b981',
-  '#6366f1',
-  '#f97316',
-  '#1d4ed8',
-  '#166534',
-  '#4b5563',
+  '#fca5a5',
+  '#fcd34d',
+  '#86efac',
+  '#93c5fd',
+  '#c4b5fd',
+  '#cbd5e1',
+  '#7dd3fc',
+  '#f9a8d4',
+  '#fde68a',
+  '#99f6e4',
+  '#a5b4fc',
+  '#fdba74',
+  '#bfdbfe',
+  '#bbf7d0',
+  '#d8b4fe',
 ];
 
 const MAX_GEMINI_INLINE_DATA_CHARS = 3_600_000;
@@ -827,22 +827,22 @@ function UniversityChart({ userGrade, data, title, isFiveGrade }) {
 
   return (
     <section className="mt-6 overflow-hidden border border-slate-200 bg-white shadow-sm print:hidden">
-      <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50/50 p-4">
-        <Trophy className="text-amber-500" size={18} />
+      <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-sky-50 via-white to-rose-50 p-4">
+        <Trophy className="text-amber-400" size={18} />
         <h2 className="text-md font-black">{title}</h2>
       </div>
-      <div className="relative overflow-x-auto overflow-y-hidden bg-white pb-16 pt-12">
+      <div className="relative overflow-x-auto overflow-y-hidden bg-gradient-to-b from-white to-slate-50/70 pb-16 pt-12">
         <div className="relative inline-flex h-[320px] min-w-full items-end gap-3 px-10">
           {isValid && (
             <div
-              className="pointer-events-none absolute z-20 border-t-2 border-dashed border-red-500 transition-all duration-500"
+              className="pointer-events-none absolute z-20 border-t-2 border-dashed border-rose-300 transition-all duration-500"
               style={{
                 bottom: `${Math.max(0, Math.min(280, (1 - (gpa - chartMin) / range) * 280 + 35))}px`,
                 left: '40px',
                 width: `${chartContentWidth}px`,
               }}
             >
-              <div className="absolute left-[-5px] top-0 z-30 flex -translate-y-1/2 items-center gap-2 whitespace-nowrap bg-red-600 px-2 py-1 text-[10px] font-black text-white shadow-lg">
+              <div className="absolute left-[-5px] top-0 z-30 flex -translate-y-1/2 items-center gap-2 whitespace-nowrap bg-rose-400 px-2 py-1 text-[10px] font-black text-white shadow-lg shadow-rose-100">
                 내위치 <span>{gpa.toFixed(2)}</span>
               </div>
             </div>
@@ -853,14 +853,14 @@ function UniversityChart({ userGrade, data, title, isFiveGrade }) {
             const barHeight = ((univ.max - univ.min) / range) * 280;
             return (
               <div key={univ.name} className="group relative flex shrink-0 flex-col items-center" style={{ width: '55px' }}>
-                <div className="relative flex h-[280px] w-10 flex-col justify-end overflow-hidden bg-slate-100/70 shadow-inner">
+                <div className="relative flex h-[280px] w-10 flex-col justify-end overflow-hidden bg-slate-50 shadow-inner ring-1 ring-slate-100">
                   <div
-                    className="absolute w-full transition-all duration-700"
+                    className="absolute w-full shadow-sm transition-all duration-700"
                     style={{
                       bottom: `${barBottom}px`,
                       height: `${barHeight}px`,
                       backgroundColor: univ.color,
-                      opacity: 0.85,
+                      opacity: 0.92,
                     }}
                   />
                 </div>
