@@ -185,10 +185,14 @@ const CHART_COLORS = [
 ];
 
 const MAX_GEMINI_INLINE_DATA_CHARS = 3_600_000;
-const IMAGE_TARGET_WIDTH = 1500;
-const IMAGE_MIN_WIDTH = 1200;
-const IMAGE_JPEG_QUALITY = 0.68;
+const IMAGE_TARGET_WIDTH = 1100;
+const IMAGE_MIN_WIDTH = 900;
+const IMAGE_JPEG_QUALITY = 0.58;
 const GEMINI_PAGE_CONCURRENCY = 1;
+const GEMINI_REQUEST_DELAY_MS = 15000;
+const GEMINI_RATE_LIMIT_RETRIES = 2;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const normalizeString = (str) =>
   String(str || '')
@@ -474,6 +478,28 @@ const fetchWithRetry = async (url, options, retries = 3, backoff = 900) => {
     }
     throw error;
   }
+};
+
+const requestGeminiJson = async (payload, onWait, retries = GEMINI_RATE_LIMIT_RETRIES) => {
+  const response = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json();
+
+  if (response.status === 429 && retries > 0) {
+    const retryDelayMs = Number(result.error?.retryDelayMs) || 65000;
+    onWait?.(retryDelayMs, result.error?.message);
+    await sleep(retryDelayMs);
+    return requestGeminiJson(payload, onWait, retries - 1);
+  }
+
+  if (!response.ok) {
+    throw new Error(result.error?.message || result.message || '분석 서버 응답 실패');
+  }
+
+  return result;
 };
 
 const recoverJson = (text) => {
@@ -940,6 +966,7 @@ export default function App() {
 
       const extractedGrades = [];
       let currentYearHint = null;
+      let geminiRequestCount = 0;
       setUploadStatus({ type: 'info', message: `파일 최적화 중: ${stagedFiles.length}개 파일을 순차 준비하고 있습니다...` });
       const optimizedGroups = [];
       for (let fileIndex = 0; fileIndex < stagedFiles.length; fileIndex += 1) {
@@ -968,6 +995,13 @@ export default function App() {
           const pageLabel = optimizedContent.label || stagedFile.name;
           const pageMatch = pageLabel.match(/(\d+)\/(\d+)/);
           const pageProgress = pageMatch ? `${pageMatch[1]}/${pageMatch[2]}페이지 (${Math.round((Number(pageMatch[1]) / Number(pageMatch[2])) * 100)}%)` : `${contentIndex + 1}/${optimizedContents.length}페이지 (${Math.round(((contentIndex + 1) / optimizedContents.length) * 100)}%)`;
+          if (geminiRequestCount > 0) {
+            setUploadStatus({
+              type: 'info',
+              message: `Gemini 사용량 제한 방지를 위해 ${Math.round(GEMINI_REQUEST_DELAY_MS / 1000)}초 대기 중: ${stagedFile.name} ${pageProgress}`,
+            });
+            await sleep(GEMINI_REQUEST_DELAY_MS);
+          }
           setUploadStatus({
             type: 'info',
             message: `분석 요청 중: ${stagedFile.name} ${pageProgress}`,
@@ -1000,7 +1034,7 @@ export default function App() {
               temperature: 0,
               responseMimeType: 'application/json',
               topP: 0.1,
-              maxOutputTokens: 8192,
+              maxOutputTokens: 4096,
               responseSchema: {
                 type: 'OBJECT',
                 properties: {
@@ -1029,12 +1063,13 @@ export default function App() {
             },
           };
 
-          const response = await fetchWithRetry('/api/gemini', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          }, 0);
-          const result = await response.json();
+          const result = await requestGeminiJson(payload, (retryDelayMs) => {
+            setUploadStatus({
+              type: 'info',
+              message: `Gemini 사용량 제한으로 ${Math.round(retryDelayMs / 1000)}초 대기 후 자동 재시도합니다: ${stagedFile.name} ${pageProgress}`,
+            });
+          });
+          geminiRequestCount += 1;
           const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
           if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');
 
