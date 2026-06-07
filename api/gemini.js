@@ -1,4 +1,6 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const MAX_RETRY_DELAY_MS = 20000;
+const RETRIES_PER_MODEL = 4;
 
 const parseModelList = () => {
   const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
@@ -13,11 +15,11 @@ const parseModelList = () => {
 const parseRetryAfter = (headerValue) => {
   if (!headerValue) return null;
   const seconds = Number.parseInt(headerValue, 10);
-  if (!Number.isNaN(seconds)) return Math.min(seconds * 1000, 8000);
+  if (!Number.isNaN(seconds)) return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS);
 
   const dateMs = Date.parse(headerValue);
   if (Number.isNaN(dateMs)) return null;
-  return Math.min(Math.max(dateMs - Date.now(), 0), 8000);
+  return Math.min(Math.max(dateMs - Date.now(), 0), MAX_RETRY_DELAY_MS);
 };
 
 const getErrorMessage = (text) => {
@@ -29,6 +31,15 @@ const getErrorMessage = (text) => {
 };
 
 const shouldRetry = (status) => [429, 500, 502, 503, 504].includes(status);
+
+const getExhaustedMessage = (errors) => {
+  const hasQuotaError = errors.some((error) => error.includes(': 429 '));
+  if (hasQuotaError) {
+    return 'Gemini API 사용량 제한에 도달했습니다. 잠시 후 다시 시도하거나 Google AI Studio에서 API quota/billing 상태를 확인해 주세요.';
+  }
+
+  return 'Gemini 모델이 일시적으로 과부하 상태입니다. 요청 속도를 낮춰 재시도했지만 모든 모델이 실패했습니다. 잠시 후 다시 시도해 주세요.';
+};
 
 const callGemini = async ({ apiKey, model, body }) => {
   const upstream = await fetch(
@@ -68,7 +79,7 @@ export default async function handler(req, res) {
 
   try {
     for (const model of models) {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < RETRIES_PER_MODEL; attempt += 1) {
         const upstream = await callGemini({ apiKey, model, body });
 
         if (upstream.ok) {
@@ -87,16 +98,15 @@ export default async function handler(req, res) {
           return res.send(upstream.text);
         }
 
-        const delay = upstream.retryAfter ?? Math.min(1000 * 2 ** attempt, 4000);
+        const delay = upstream.retryAfter ?? Math.min(1500 * 2 ** attempt, MAX_RETRY_DELAY_MS);
         await sleep(delay);
       }
     }
 
     return res.status(503).json({
       error: {
-        message:
-          'Gemini model is temporarily overloaded. The app retried and tried fallback models, but all attempts failed. Please try again in a moment.',
-        attempts: errors.slice(-6),
+        message: getExhaustedMessage(errors),
+        attempts: errors.slice(-10),
       },
     });
   } catch (error) {

@@ -188,6 +188,7 @@ const MAX_GEMINI_INLINE_DATA_CHARS = 3_600_000;
 const IMAGE_TARGET_WIDTH = 1500;
 const IMAGE_MIN_WIDTH = 1200;
 const IMAGE_JPEG_QUALITY = 0.68;
+const GEMINI_PAGE_CONCURRENCY = 1;
 
 const normalizeString = (str) =>
   String(str || '')
@@ -939,14 +940,20 @@ export default function App() {
 
       const extractedGrades = [];
       let currentYearHint = null;
-      setUploadStatus({ type: 'info', message: `파일 최적화 중: ${stagedFiles.length}개 파일을 병렬 준비하고 있습니다...` });
-      const optimizedGroups = await Promise.all(
-        stagedFiles.map(async (stagedFile, fileIndex) => ({
+      setUploadStatus({ type: 'info', message: `파일 최적화 중: ${stagedFiles.length}개 파일을 순차 준비하고 있습니다...` });
+      const optimizedGroups = [];
+      for (let fileIndex = 0; fileIndex < stagedFiles.length; fileIndex += 1) {
+        const stagedFile = stagedFiles[fileIndex];
+        setUploadStatus({
+          type: 'info',
+          message: `파일 최적화 중 (${fileIndex + 1}/${stagedFiles.length}): ${stagedFile.name}`,
+        });
+        optimizedGroups.push({
           stagedFile,
           fileIndex,
           optimizedContents: await optimizeFile(stagedFile.file),
-        })),
-      );
+        });
+      }
 
       for (let index = 0; index < optimizedGroups.length; index += 1) {
         const { stagedFile, optimizedContents } = optimizedGroups[index];
@@ -955,7 +962,7 @@ export default function App() {
           message: `파일 분석 중 (${index + 1}/${stagedFiles.length}): ${stagedFile.name}`,
         });
 
-        const contentResults = await mapWithConcurrency(optimizedContents, 4, async (optimizedContent, contentIndex) => {
+        const contentResults = await mapWithConcurrency(optimizedContents, GEMINI_PAGE_CONCURRENCY, async (optimizedContent, contentIndex) => {
           const effectiveYearHint = optimizedContent.yearHint || currentYearHint;
           assertPayloadSize(optimizedContent, optimizedContent.label || stagedFile.name);
           const pageLabel = optimizedContent.label || stagedFile.name;
