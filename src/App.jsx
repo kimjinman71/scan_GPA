@@ -29,10 +29,6 @@ import {
   ResponsiveContainer,
   LabelList,
 } from 'recharts';
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const SEMESTERS = [
   '1학년 1학기',
@@ -185,11 +181,12 @@ const CHART_COLORS = [
 ];
 
 const MAX_GEMINI_INLINE_DATA_CHARS = 3_600_000;
-const IMAGE_TARGET_WIDTH = 1100;
-const IMAGE_MIN_WIDTH = 900;
-const IMAGE_JPEG_QUALITY = 0.58;
-const GEMINI_PAGE_CONCURRENCY = 1;
-const GEMINI_REQUEST_DELAY_MS = 15000;
+const MAX_DIRECT_FILE_SIZE_BYTES = 3 * 1024 * 1024;
+const MAX_DIRECT_INLINE_DATA_CHARS = 4_100_000;
+const MAX_GEMINI_BATCH_DATA_CHARS = 4_000_000;
+const IMAGE_TARGET_WIDTH = 1400;
+const IMAGE_MIN_WIDTH = 1100;
+const IMAGE_JPEG_QUALITY = 0.66;
 const GEMINI_RATE_LIMIT_RETRIES = 2;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -261,15 +258,8 @@ const canvasToInlineData = (canvas) => ({
 
 const SCHOOL_YEAR_LABEL = '\uD559\uB144';
 const SEMESTER_LABEL = '\uD559\uAE30';
-const schoolYearPattern = new RegExp(`([1-3])\\s*${SCHOOL_YEAR_LABEL}`);
 const detectedYearPattern = new RegExp(`([1-3])\\s*${SCHOOL_YEAR_LABEL}|^\\s*([1-3])\\s*$`);
 const semesterTermPattern = new RegExp(`([1-2])\\s*${SEMESTER_LABEL}|^\\s*([1-2])\\s*$`);
-
-const detectSchoolYear = (text) => {
-  const normalized = normalizeString(text);
-  const match = normalized.match(schoolYearPattern);
-  return match ? Number(match[1]) : null;
-};
 
 const parseDetectedYear = (value) => {
   const match = normalizeString(value).match(detectedYearPattern);
@@ -302,22 +292,6 @@ const repairSemesterSequence = (items) => {
       semester: `${currentYear}${SCHOOL_YEAR_LABEL} ${parts.term}${SEMESTER_LABEL}`,
     };
   });
-};
-
-const mapWithConcurrency = async (items, concurrency, mapper) => {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index], index);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
 };
 
 const optimizeImageElement = (img) => {
@@ -384,48 +358,32 @@ const optimizeImageElement = (img) => {
   return canvasToInlineData(canvas);
 };
 
-const optimizePdf = async (file) => {
-  const data = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data }).promise;
-  const pages = [];
-  let currentYearHint = null;
-
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items.map((item) => item.str || '').join(' ');
-    const yearHint = detectSchoolYear(pageText);
-    if (yearHint) currentYearHint = yearHint;
-    const baseViewport = page.getViewport({ scale: 1 });
-    const scale = IMAGE_TARGET_WIDTH / baseViewport.width;
-    const viewport = page.getViewport({ scale });
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { alpha: false });
-
-    canvas.width = Math.round(viewport.width);
-    canvas.height = Math.round(viewport.height);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    await page.render({
-      canvasContext: ctx,
-      viewport,
-      background: '#ffffff',
-    }).promise;
-
-    pages.push({
-      ...canvasToInlineData(canvas),
-      label: `${file.name} ${pageNumber}/${pdf.numPages}페이지`,
-      yearHint: yearHint || currentYearHint,
-    });
+const fileToInlineData = async (file) => {
+  if (file.size > MAX_DIRECT_FILE_SIZE_BYTES) {
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    throw new Error(`${file.name} 파일이 너무 큽니다. 현재 ${mb}MB입니다. Vercel 안정성을 위해 3MB 이하 PDF로 압축하거나 학년별로 나누어 업로드해 주세요.`);
   }
 
-  return pages;
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = (event) => {
+      const dataUrl = String(event.target.result || '');
+      const [, data = ''] = dataUrl.split(',');
+      resolve({
+        data,
+        mimeType: file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
+        label: file.name,
+        isDirectFile: true,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
 };
 
 const optimizeFile = async (file) => {
   if (file.type === 'application/pdf') {
-    return optimizePdf(file);
+    return [await fileToInlineData(file)];
   }
 
   return new Promise((resolve, reject) => {
@@ -444,40 +402,43 @@ const optimizeFile = async (file) => {
 };
 
 const assertPayloadSize = (optimizedContent, fileName) => {
-  if (optimizedContent.data.length > MAX_GEMINI_INLINE_DATA_CHARS) {
+  const limit = optimizedContent.isDirectFile ? MAX_DIRECT_INLINE_DATA_CHARS : MAX_GEMINI_INLINE_DATA_CHARS;
+  if (optimizedContent.data.length > limit) {
     const mb = (optimizedContent.data.length / 1024 / 1024).toFixed(2);
     throw new Error(
-      `${fileName} 파일이 압축 후에도 너무 큽니다. 현재 약 ${mb}MB입니다. PDF는 페이지별 이미지로 저장하거나 더 낮은 해상도의 이미지로 다시 업로드해 주세요.`,
+      `${fileName} 파일이 Vercel 요청 한도에 비해 큽니다. 현재 전송 데이터가 약 ${mb}MB입니다. PDF를 3MB 이하로 압축하거나 학년별로 나누어 업로드해 주세요.`,
     );
   }
 };
 
-const fetchWithRetry = async (url, options, retries = 3, backoff = 900) => {
-  try {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-      const body = await response.text();
-      const message = (() => {
-        try {
-          return JSON.parse(body)?.error?.message || body;
-        } catch {
-          return body;
-        }
-      })();
-      if (retries > 0) {
-        await new Promise((resolve) => setTimeout(resolve, backoff));
-        return fetchWithRetry(url, options, retries - 1, backoff * 2);
-      }
-      throw new Error(message || '분석 서버 응답 실패');
+const createGeminiBatches = (items) => {
+  const batches = [];
+  let currentBatch = [];
+  let currentSize = 0;
+
+  items.forEach((item) => {
+    assertPayloadSize(item, item.label);
+    if (currentBatch.length > 0 && currentSize + item.data.length > MAX_GEMINI_BATCH_DATA_CHARS) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentSize = 0;
     }
-    return response;
-  } catch (error) {
-    if (retries > 0) {
-      await new Promise((resolve) => setTimeout(resolve, backoff));
-      return fetchWithRetry(url, options, retries - 1, backoff * 2);
-    }
-    throw error;
-  }
+    currentBatch.push(item);
+    currentSize += item.data.length;
+  });
+
+  if (currentBatch.length > 0) batches.push(currentBatch);
+  return batches;
+};
+
+const dedupeGrades = (items) => {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = [item.semester, normalizeString(item.group), normalizeString(item.name), item.grade].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 };
 
 const requestGeminiJson = async (payload, onWait, retries = GEMINI_RATE_LIMIT_RETRIES) => {
@@ -957,159 +918,148 @@ export default function App() {
     setUploadStatus({ type: 'info', message: '초정밀 비전 스캔 가동: 파일을 1개씩 압축 분석 중입니다...' });
 
     try {
-      const systemInstruction = `당신은 대한민국 고등학교 생활기록부 '교과학습발달상황' 내신성적표 전용 초정밀 데이터 추출 비전 AI입니다.
-오직 '교과학습발달상황' 하위의 [1학년], [2학년], [3학년] 성적 표 내부 데이터 행만 수집하십시오.
-인적학적사항, 출결상황, 수상경력, 창의적 체험활동상황, 독서활동상황, 행동특성 및 종합의견, 봉사활동실적, 세부능력 및 특기사항 등 성적 표가 아닌 영역은 모두 무시하십시오.
-석차등급, 원점수, 과목평균이 공란이거나 '.', '-', '/'로 표기된 경우 임의 숫자를 만들지 말고 반드시 "" 또는 "null"로 반환하십시오.
-성취도나 등급이 P인 과목은 최종 배열에서 제외하십시오.
-교과는 국어, 수학, 영어, 사회, 과학, 한국사, 기타 중 하나로만 반환하십시오.`;
+      const systemInstruction = `당신은 대한민국 고등학교 학교생활기록부 '교과학습발달상황' 성적표 전용 데이터 추출 엔진입니다.
+첨부된 PDF, 스캔본, 이미지에서 오직 [교과학습발달상황]의 과목별 성적 행만 추출하십시오.
+인적학적사항, 출결상황, 수상경력, 창의적 체험활동, 봉사활동, 독서활동, 세부능력 및 특기사항, 행동특성 및 종합의견은 모두 무시하십시오.
+각 성적 행은 반드시 실제 표에 있는 값만 사용하고, 빈칸/점/하이픈/슬래시/null 값은 추측하지 마십시오.
+석차등급이 1~9 숫자인 과목만 grades 배열에 포함하십시오. 성취도 P, 이수/미이수, 등급 공란, 절대평가 전용 과목은 제외하십시오.
+학년/학기는 표 바깥의 [1학년], [2학년], [3학년] 제목과 표 내부 학기 열을 함께 보고 정확히 매핑하십시오.
+semester는 반드시 "1학년 1학기", "1학년 2학기", "2학년 1학기", "2학년 2학기", "3학년 1학기", "3학년 2학기" 중 하나로 반환하십시오.
+교과 group은 국어, 수학, 영어, 사회, 과학, 한국사, 기타 중 하나로만 반환하십시오.
+동일 파일/동일 학기/동일 과목이 중복 인식되면 한 번만 반환하십시오.
+응답은 설명 없이 JSON 객체 하나만 반환하십시오.`;
 
       const extractedGrades = [];
       let currentYearHint = null;
-      let geminiRequestCount = 0;
-      setUploadStatus({ type: 'info', message: `파일 최적화 중: ${stagedFiles.length}개 파일을 순차 준비하고 있습니다...` });
-      const optimizedGroups = [];
+      setUploadStatus({ type: 'info', message: `원본 파일 준비 중: ${stagedFiles.length}개 파일을 순차 처리하고 있습니다...` });
+      const optimizedItems = [];
       for (let fileIndex = 0; fileIndex < stagedFiles.length; fileIndex += 1) {
         const stagedFile = stagedFiles[fileIndex];
         setUploadStatus({
           type: 'info',
-          message: `파일 최적화 중 (${fileIndex + 1}/${stagedFiles.length}): ${stagedFile.name}`,
+          message: `원본 파일 준비 중 (${fileIndex + 1}/${stagedFiles.length}): ${stagedFile.name}`,
         });
-        optimizedGroups.push({
-          stagedFile,
-          fileIndex,
-          optimizedContents: await optimizeFile(stagedFile.file),
-        });
+        const optimizedContents = await optimizeFile(stagedFile.file);
+        optimizedItems.push(
+          ...optimizedContents.map((content, contentIndex) => ({
+            ...content,
+            sourceName: stagedFile.name,
+            sourceIndex: fileIndex,
+            contentIndex,
+            label: content.label || stagedFile.name,
+          })),
+        );
       }
 
-      for (let index = 0; index < optimizedGroups.length; index += 1) {
-        const { stagedFile, optimizedContents } = optimizedGroups[index];
+      const batches = createGeminiBatches(optimizedItems);
+      for (let index = 0; index < batches.length; index += 1) {
+        const batch = batches[index];
+        const batchLabel = batch.map((item) => item.label).join(', ');
         setUploadStatus({
           type: 'info',
-          message: `파일 분석 중 (${index + 1}/${stagedFiles.length}): ${stagedFile.name}`,
+          message: `Gemini 원본 파일 분석 중 (${index + 1}/${batches.length}): ${batchLabel}`,
         });
 
-        const contentResults = await mapWithConcurrency(optimizedContents, GEMINI_PAGE_CONCURRENCY, async (optimizedContent, contentIndex) => {
-          const effectiveYearHint = optimizedContent.yearHint || currentYearHint;
-          assertPayloadSize(optimizedContent, optimizedContent.label || stagedFile.name);
-          const pageLabel = optimizedContent.label || stagedFile.name;
-          const pageMatch = pageLabel.match(/(\d+)\/(\d+)/);
-          const pageProgress = pageMatch ? `${pageMatch[1]}/${pageMatch[2]}페이지 (${Math.round((Number(pageMatch[1]) / Number(pageMatch[2])) * 100)}%)` : `${contentIndex + 1}/${optimizedContents.length}페이지 (${Math.round(((contentIndex + 1) / optimizedContents.length) * 100)}%)`;
-          if (geminiRequestCount > 0) {
-            setUploadStatus({
-              type: 'info',
-              message: `Gemini 사용량 제한 방지를 위해 ${Math.round(GEMINI_REQUEST_DELAY_MS / 1000)}초 대기 중: ${stagedFile.name} ${pageProgress}`,
-            });
-            await sleep(GEMINI_REQUEST_DELAY_MS);
-          }
-          setUploadStatus({
-            type: 'info',
-            message: `분석 요청 중: ${stagedFile.name} ${pageProgress}`,
-          });
-
-          const payload = {
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    text: `${effectiveYearHint ? `이 페이지는 학생부의 [${effectiveYearHint}학년] 영역입니다. 표의 학기 열 값 1은 ${effectiveYearHint}학년 1학기, 학기 열 값 2는 ${effectiveYearHint}학년 2학기로 매핑하세요.\n` : ''}이미지에 [1학년], [2학년], [3학년] 제목만 보이면 detected_year에 해당 학년을 반환하세요. 세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 석차등급이 비어 있거나 P이거나 1~9 숫자가 아닌 행은 반환하지 마세요. 빈칸에 가짜 숫자를 넣지 마세요.`,
-                  },
-                  {
-                    inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
-                  },
-                ],
-              },
-            ],
-            systemInstruction: {
+        const payload = {
+          contents: [
+            {
+              role: 'user',
               parts: [
                 {
-                  text: `${systemInstruction}
-학년 문맥만은 예외적으로 표 바깥의 [1학년], [2학년], [3학년] 제목도 읽어 detected_year에 반환하십시오. 다른 항목의 파싱 규칙은 기존 지시를 그대로 따르십시오.
-석차등급이 null, 빈칸, P, 또는 1~9 숫자가 아닌 과목 행은 grades 배열에 포함하지 마십시오.`,
+                  text: `아래 첨부 파일 ${batch.length}개를 하나의 학생부 묶음으로 보고 분석하세요.
+파일 목록:
+${batch.map((item, itemIndex) => `${itemIndex + 1}. ${item.label} (${item.mimeType})`).join('\n')}
+
+모든 파일에서 [교과학습발달상황] 과목 성적표 행만 추출해 하나의 JSON으로 합치세요. PDF/스캔본/이미지의 원본 내용을 직접 읽고, 누락 없이 1~3학년 1~2학기 과목을 반환하세요.`,
                 },
+                ...batch.flatMap((item, itemIndex) => [
+                  { text: `첨부 ${itemIndex + 1}: ${item.label}` },
+                  { inlineData: { mimeType: item.mimeType, data: item.data } },
+                ]),
               ],
             },
-            generationConfig: {
-              temperature: 0,
-              responseMimeType: 'application/json',
-              topP: 0.1,
-              maxOutputTokens: 4096,
-              responseSchema: {
-                type: 'OBJECT',
-                properties: {
-                  detected_rows: { type: 'INTEGER' },
-                  detected_year: { type: 'STRING' },
-                  grades: {
-                    type: 'ARRAY',
-                    items: {
-                      type: 'OBJECT',
-                      properties: {
-                        semester: { type: 'STRING' },
-                        group: { type: 'STRING' },
-                        name: { type: 'STRING' },
-                        credits: { type: 'STRING' },
-                        score: { type: 'STRING' },
-                        mean: { type: 'STRING' },
-                        achievement: { type: 'STRING' },
-                        grade: { type: 'STRING' },
-                        studentCount: { type: 'STRING' },
-                      },
-                      required: ['semester', 'group', 'name'],
+          ],
+          systemInstruction: {
+            parts: [
+              {
+                text: systemInstruction,
+              },
+            ],
+          },
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: 'application/json',
+            topP: 0.1,
+            maxOutputTokens: 8192,
+            responseSchema: {
+              type: 'OBJECT',
+              properties: {
+                detected_rows: { type: 'INTEGER' },
+                detected_year: { type: 'STRING' },
+                grades: {
+                  type: 'ARRAY',
+                  items: {
+                    type: 'OBJECT',
+                    properties: {
+                      semester: { type: 'STRING' },
+                      group: { type: 'STRING' },
+                      name: { type: 'STRING' },
+                      credits: { type: 'STRING' },
+                      score: { type: 'STRING' },
+                      mean: { type: 'STRING' },
+                      achievement: { type: 'STRING' },
+                      grade: { type: 'STRING' },
+                      studentCount: { type: 'STRING' },
                     },
+                    required: ['semester', 'group', 'name'],
                   },
                 },
               },
             },
-          };
+          },
+        };
 
-          const result = await requestGeminiJson(payload, (retryDelayMs) => {
-            setUploadStatus({
-              type: 'info',
-              message: `Gemini 사용량 제한으로 ${Math.round(retryDelayMs / 1000)}초 대기 후 자동 재시도합니다: ${stagedFile.name} ${pageProgress}`,
-            });
+        const result = await requestGeminiJson(payload, (retryDelayMs) => {
+          setUploadStatus({
+            type: 'info',
+            message: `Gemini 사용량 제한으로 ${Math.round(retryDelayMs / 1000)}초 대기 후 자동 재시도합니다: ${batchLabel}`,
           });
-          geminiRequestCount += 1;
-          const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');
+        });
+        const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawText) throw new Error(result.error?.message || 'AI 응답을 수신하지 못했습니다.');
 
-          const parsedData = recoverJson(rawText);
-          const detectedYear = parseDetectedYear(parsedData.detected_year);
-          if (!Array.isArray(parsedData.grades)) {
-            if (detectedYear) {
-              parsedData.grades = [];
-            } else {
-              throw new Error('데이터 구조가 유효하지 않습니다.');
-            }
+        const parsedData = recoverJson(rawText);
+        const detectedYear = parseDetectedYear(parsedData.detected_year);
+        if (detectedYear && batch.length === 1) currentYearHint = detectedYear;
+        if (!Array.isArray(parsedData.grades)) {
+          if (detectedYear) {
+            parsedData.grades = [];
+          } else {
+            throw new Error('데이터 구조가 유효하지 않습니다.');
           }
-          return { optimizedContent, parsedData, detectedYear };
-        });
+        }
 
-        contentResults.forEach(({ optimizedContent, parsedData, detectedYear }) => {
-          if (detectedYear) currentYearHint = detectedYear;
-          if (optimizedContent.yearHint) currentYearHint = optimizedContent.yearHint;
-
-          extractedGrades.push(
-            ...parsedData.grades
-              .filter((item) => {
-                if (!item.name) return false;
-                const achievement = String(item.achievement || '').toUpperCase().trim();
-                const grade = String(item.grade || '').toUpperCase().trim();
-                const numericGrade = parseNum(item.grade);
-                return (
-                  !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P')) &&
-                  numericGrade !== null &&
-                  numericGrade >= 1 &&
-                  numericGrade <= 9
-                );
-              })
-              .map((item, itemIndex) => normalizeParsedGrade(item, itemIndex, optimizedContent.yearHint || currentYearHint)),
-          );
-        });
+        const normalizationYearHint = batch.length === 1 ? currentYearHint : null;
+        extractedGrades.push(
+          ...parsedData.grades
+            .filter((item) => {
+              if (!item.name) return false;
+              const achievement = String(item.achievement || '').toUpperCase().trim();
+              const grade = String(item.grade || '').toUpperCase().trim();
+              const numericGrade = parseNum(item.grade);
+              return (
+                !(achievement === 'P' || grade === 'P' || achievement.includes('P') || grade.includes('P')) &&
+                numericGrade !== null &&
+                numericGrade >= 1 &&
+                numericGrade <= 9
+              );
+            })
+            .map((item, itemIndex) => normalizeParsedGrade(item, itemIndex, normalizationYearHint)),
+        );
       }
 
       setGrades((previous) => {
-        const repairedGrades = repairSemesterSequence(extractedGrades);
+        const repairedGrades = dedupeGrades(repairSemesterSequence(extractedGrades));
         const isInitialDummy = previous.length === 2 && previous[0].id === 1 && previous[1].id === 2;
         if (isInitialDummy) return repairedGrades;
 

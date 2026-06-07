@@ -2,6 +2,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const MAX_RETRY_DELAY_MS = 20000;
 const RETRIES_PER_MODEL = 4;
 const RATE_LIMIT_RETRY_DELAY_MS = 65000;
+const MAX_REQUEST_BODY_CHARS = 4_500_000;
 
 const parseModelList = () => {
   const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
@@ -80,6 +81,14 @@ export default async function handler(req, res) {
   }
 
   const body = JSON.stringify(req.body);
+  if (body.length > MAX_REQUEST_BODY_CHARS) {
+    return res.status(413).json({
+      error: {
+        message: '업로드한 파일이 Vercel 함수 요청 한도를 초과했습니다. PDF를 3MB 이하로 압축하거나 학년별로 나누어 업로드해 주세요.',
+      },
+    });
+  }
+
   const errors = [];
 
   try {
