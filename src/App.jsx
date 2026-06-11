@@ -1011,7 +1011,6 @@ ${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없�
                 ],
               },
             ],
-            model: 'gemini-2.5-flash',
             systemInstruction: {
               parts: [
                 {

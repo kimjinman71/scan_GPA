@@ -1,8 +1,6 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const parseModelList = (requestedModel) => {
-  if (requestedModel) return [requestedModel];
-
   const primaryModel = requestedModel || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const fallbackModels = String(process.env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash-lite,gemini-2.0-flash')
     .split(',')
@@ -97,7 +95,7 @@ export default async function handler(req, res) {
     return res.status(503).json({
       error: {
         message:
-          'Gemini model is temporarily overloaded. The app retried and tried fallback models, but all attempts failed. Please try again in a moment.',
+          'Gemini 모델이 일시적으로 과부하 상태입니다. 기본 모델과 대체 모델을 모두 재시도했지만 실패했습니다. 잠시 후 다시 시도하거나 GEMINI_FALLBACK_MODELS에 gemini-2.0-flash,gemini-2.5-flash-lite가 설정되어 있는지 확인해 주세요.',
         attempts: errors.slice(-6),
       },
     });
