@@ -1,6 +1,8 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const parseModelList = (requestedModel) => {
+  if (requestedModel) return [requestedModel];
+
   const primaryModel = requestedModel || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const fallbackModels = String(process.env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash-lite,gemini-2.0-flash')
     .split(',')

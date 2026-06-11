@@ -452,9 +452,24 @@ const isInitialSampleGrades = (items) => items.length === 2 && items[0]?.id === 
 const formatExistingRowsForPrompt = (items) =>
   items
     .filter((grade) => grade.grade !== null)
-    .map((grade) => `${grade.semester} | ${grade.group} | ${grade.name} | 등급 ${grade.grade}`)
+    .map((grade) => `${grade.semester} | ${grade.group} | ${grade.name} | 학점 ${grade.credits} | 등급 ${grade.grade}`)
     .slice(0, 120)
     .join('\n');
+
+const gradeIdentityKey = (grade) => `${grade.semester}-${normalizeString(grade.group)}-${normalizeString(grade.name)}`;
+
+const shouldRemoveGrade = (grade, removeRow) => {
+  const removeName = normalizeString(removeRow?.name);
+  if (!removeName || normalizeString(grade.name) !== removeName) return false;
+
+  const removeSemester = normalizeString(removeRow?.semester);
+  if (removeSemester && normalizeString(grade.semester) !== removeSemester) return false;
+
+  const removeGroup = normalizeString(removeRow?.group);
+  if (removeGroup && normalizeString(grade.group) !== removeGroup) return false;
+
+  return true;
+};
 
 const fetchWithRetry = async (url, options, retries = 3, backoff = 900) => {
   try {
@@ -942,15 +957,17 @@ export default function App() {
       const continuationMode = grades.length > 0 && !isInitialSampleGrades(grades);
       const existingRowsForPrompt = continuationMode ? formatExistingRowsForPrompt(grades) : '';
       const systemInstruction = `당신은 대한민국 고등학교 생활기록부 '교과학습발달상황' 내신성적표 전용 초정밀 데이터 추출 비전 AI입니다.
-오직 '교과학습발달상황' 하위의 [1학년], [2학년], [3학년] 성적 표 내부 데이터 행만 수집하십시오.
-인적학적사항, 출결상황, 수상경력, 창의적 체험활동상황, 독서활동상황, 행동특성 및 종합의견, 봉사활동실적, 세부능력 및 특기사항 등 성적 표가 아닌 영역은 모두 무시하십시오.
-표의 첫 행, 마지막 행, 페이지 경계에 걸린 행, 흐릿한 행, 학기 열이 비어 보이는 행을 절대 건너뛰지 말고 확대해서 다시 확인하십시오.
+오직 '교과학습발달상황' 영역만 스캔하고, 그 외 인적학적사항, 출결상황, 수상경력, 창의적 체험활동상황, 독서활동상황, 행동특성 및 종합의견, 봉사활동실적, 세부능력 및 특기사항 등은 모두 삭제한 것처럼 완전히 무시하십시오.
+'교과학습발달상황' 안에서도 [1학년], [2학년], [3학년] 제목 바로 아래에 있는 첫 번째 과목 성적 표만 스캔하십시오. 각 학년의 첫 번째 표 이후에 나오는 세부능력, 특기사항, 과목별 서술, 다음 표, 요약표, 기타 영역은 모두 삭제한 것처럼 무시하십시오.
+각 학년 첫 번째 표에서 학기, 교과, 과목, 학점(수), 원점수, 과목평균, 성취도, 수강자수, 석차등급을 같은 행 기준으로 정확히 매핑하십시오.
+표의 첫 행, 마지막 행, 페이지 경계에 걸린 행, 흐릿한 행을 절대 건너뛰지 말고 확대해서 다시 확인하십시오.
 석차등급, 원점수, 과목평균이 공란이거나 '.', '-', '/'로 표기된 경우 임의 숫자를 만들지 말고 반드시 "" 또는 "null"로 반환하십시오.
-성취도나 등급이 P인 과목은 최종 배열에서 제외하십시오.
+석차등급 칸이 비어 있거나 P이거나 1~9 숫자가 아니면 그 행의 학년/학기, 교과, 과목, 학점, 원점수, 과목평균, 성취도, 수강자수도 모두 매핑하지 말고 grades 배열에서 제외하십시오.
 교과는 국어, 수학, 영어, 사회, 과학, 한국사, 기타 중 하나로만 반환하십시오.
-${continuationMode ? '이미 추출된 행 목록과 비교하여 누락된 성적 행만 반환하십시오. 이미 추출된 동일 학기/동일 과목은 다시 반환하지 마십시오.' : '학생부 이미지 안의 모든 성적 행을 누락 없이 반환하십시오.'}`;
+${continuationMode ? '이미 추출된 행 목록과 비교하여 누락된 성적 행은 grades에 반환하고, 이미 추출된 행 중 실제 표에서 석차등급이 없거나 P이거나 잘못 매핑된 행은 remove_rows에 반환하십시오. 이미 올바르게 추출된 동일 학기/동일 과목은 다시 반환하지 마십시오.' : '학생부 이미지 안의 각 학년 첫 번째 성적 표를 행 단위로 누락 없이 반환하십시오.'}`;
 
       const extractedGrades = [];
+      const removeRows = [];
       let currentYearHint = null;
       setUploadStatus({ type: 'info', message: `파일 최적화 중: ${stagedFiles.length}개 파일을 병렬 준비하고 있습니다...` });
       const optimizedGroups = await Promise.all(
@@ -985,8 +1002,8 @@ ${continuationMode ? '이미 추출된 행 목록과 비교하여 누락된 성�
                 role: 'user',
                 parts: [
                   {
-                    text: `${effectiveYearHint ? `이 페이지는 학생부의 [${effectiveYearHint}학년] 영역입니다. 표의 학기 열 값 1은 ${effectiveYearHint}학년 1학기, 학기 열 값 2는 ${effectiveYearHint}학년 2학기로 매핑하세요.\n` : ''}이미지에 [1학년], [2학년], [3학년] 제목만 보이면 detected_year에 해당 학년을 반환하세요. 세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 석차등급이 비어 있거나 P이거나 1~9 숫자가 아닌 행은 반환하지 마세요. 빈칸에 가짜 숫자를 넣지 마세요.
-${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없음'}\n위 목록에 없는 누락 행만 찾아서 반환하세요. 특히 표 상단/하단/페이지가 넘어가는 부분을 다시 확인하세요.` : '\n전체 표를 행 단위로 처음부터 끝까지 훑고 누락 없이 반환하세요.'}`,
+                    text: `${effectiveYearHint ? `이 페이지는 학생부의 [${effectiveYearHint}학년] 영역입니다. 표의 학기 열 값 1은 ${effectiveYearHint}학년 1학기, 학기 열 값 2는 ${effectiveYearHint}학년 2학기로 매핑하세요.\n` : ''}[교과학습발달상황] 영역 안의 [1학년]/[2학년]/[3학년] 제목 바로 아래 첫 번째 표만 읽으세요. 세특, 행동특성, 출결, 수상, 독서, 교과별 서술, 첫 번째 표가 아닌 모든 영역은 삭제한 것처럼 무시하세요. 석차등급이 비어 있거나 P이거나 1~9 숫자가 아닌 행은 절대로 반환하지 마세요. 빈칸에 가짜 숫자를 넣지 마세요.
+${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없음'}\n위 목록에 없는 누락 행은 grades에 반환하세요. 위 목록 중 실제 첫 번째 표에서 석차등급이 비어 있거나 P이거나 행 매핑이 틀린 항목은 remove_rows에 반환하세요.` : '\n각 학년 제목 바로 아래 첫 번째 표를 행 단위로 처음부터 끝까지 훑고, 석차등급이 1~9인 행만 누락 없이 반환하세요.'}`,
                   },
                   {
                     inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
@@ -1032,6 +1049,18 @@ ${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없�
                       required: ['semester', 'group', 'name'],
                     },
                   },
+                  remove_rows: {
+                    type: 'ARRAY',
+                    items: {
+                      type: 'OBJECT',
+                      properties: {
+                        semester: { type: 'STRING' },
+                        group: { type: 'STRING' },
+                        name: { type: 'STRING' },
+                        reason: { type: 'STRING' },
+                      },
+                    },
+                  },
                 },
               },
             },
@@ -1055,12 +1084,14 @@ ${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없�
               throw new Error('데이터 구조가 유효하지 않습니다.');
             }
           }
+          if (!Array.isArray(parsedData.remove_rows)) parsedData.remove_rows = [];
           return { optimizedContent, parsedData, detectedYear };
         });
 
         contentResults.forEach(({ optimizedContent, parsedData, detectedYear }) => {
           if (detectedYear) currentYearHint = detectedYear;
           if (optimizedContent.yearHint) currentYearHint = optimizedContent.yearHint;
+          removeRows.push(...parsedData.remove_rows);
 
           extractedGrades.push(
             ...parsedData.grades
@@ -1086,9 +1117,10 @@ ${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없�
         const isInitialDummy = isInitialSampleGrades(previous);
         if (isInitialDummy) return repairedGrades;
 
-        const existingKeys = new Set(previous.map((grade) => `${grade.semester}-${grade.name}`));
-        const uniqueNewGrades = repairedGrades.filter((grade) => !existingKeys.has(`${grade.semester}-${grade.name}`));
-        return [...previous, ...uniqueNewGrades];
+        const correctedPrevious = previous.filter((grade) => !removeRows.some((removeRow) => shouldRemoveGrade(grade, removeRow)));
+        const existingKeys = new Set(correctedPrevious.map(gradeIdentityKey));
+        const uniqueNewGrades = repairedGrades.filter((grade) => !existingKeys.has(gradeIdentityKey(grade)));
+        return [...correctedPrevious, ...uniqueNewGrades];
       });
 
       setUploadStatus({
