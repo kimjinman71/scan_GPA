@@ -447,6 +447,15 @@ const assertPayloadSize = (optimizedContent, fileName) => {
   }
 };
 
+const isInitialSampleGrades = (items) => items.length === 2 && items[0]?.id === 1 && items[1]?.id === 2;
+
+const formatExistingRowsForPrompt = (items) =>
+  items
+    .filter((grade) => grade.grade !== null)
+    .map((grade) => `${grade.semester} | ${grade.group} | ${grade.name} | 등급 ${grade.grade}`)
+    .slice(0, 120)
+    .join('\n');
+
 const fetchWithRetry = async (url, options, retries = 3, backoff = 900) => {
   try {
     const response = await fetch(url, options);
@@ -930,12 +939,16 @@ export default function App() {
     setUploadStatus({ type: 'info', message: '초정밀 비전 스캔 가동: 파일을 1개씩 압축 분석 중입니다...' });
 
     try {
+      const continuationMode = grades.length > 0 && !isInitialSampleGrades(grades);
+      const existingRowsForPrompt = continuationMode ? formatExistingRowsForPrompt(grades) : '';
       const systemInstruction = `당신은 대한민국 고등학교 생활기록부 '교과학습발달상황' 내신성적표 전용 초정밀 데이터 추출 비전 AI입니다.
 오직 '교과학습발달상황' 하위의 [1학년], [2학년], [3학년] 성적 표 내부 데이터 행만 수집하십시오.
 인적학적사항, 출결상황, 수상경력, 창의적 체험활동상황, 독서활동상황, 행동특성 및 종합의견, 봉사활동실적, 세부능력 및 특기사항 등 성적 표가 아닌 영역은 모두 무시하십시오.
+표의 첫 행, 마지막 행, 페이지 경계에 걸린 행, 흐릿한 행, 학기 열이 비어 보이는 행을 절대 건너뛰지 말고 확대해서 다시 확인하십시오.
 석차등급, 원점수, 과목평균이 공란이거나 '.', '-', '/'로 표기된 경우 임의 숫자를 만들지 말고 반드시 "" 또는 "null"로 반환하십시오.
 성취도나 등급이 P인 과목은 최종 배열에서 제외하십시오.
-교과는 국어, 수학, 영어, 사회, 과학, 한국사, 기타 중 하나로만 반환하십시오.`;
+교과는 국어, 수학, 영어, 사회, 과학, 한국사, 기타 중 하나로만 반환하십시오.
+${continuationMode ? '이미 추출된 행 목록과 비교하여 누락된 성적 행만 반환하십시오. 이미 추출된 동일 학기/동일 과목은 다시 반환하지 마십시오.' : '학생부 이미지 안의 모든 성적 행을 누락 없이 반환하십시오.'}`;
 
       const extractedGrades = [];
       let currentYearHint = null;
@@ -972,7 +985,8 @@ export default function App() {
                 role: 'user',
                 parts: [
                   {
-                    text: `${effectiveYearHint ? `이 페이지는 학생부의 [${effectiveYearHint}학년] 영역입니다. 표의 학기 열 값 1은 ${effectiveYearHint}학년 1학기, 학기 열 값 2는 ${effectiveYearHint}학년 2학기로 매핑하세요.\n` : ''}이미지에 [1학년], [2학년], [3학년] 제목만 보이면 detected_year에 해당 학년을 반환하세요. 세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 석차등급이 비어 있거나 P이거나 1~9 숫자가 아닌 행은 반환하지 마세요. 빈칸에 가짜 숫자를 넣지 마세요.`,
+                    text: `${effectiveYearHint ? `이 페이지는 학생부의 [${effectiveYearHint}학년] 영역입니다. 표의 학기 열 값 1은 ${effectiveYearHint}학년 1학기, 학기 열 값 2는 ${effectiveYearHint}학년 2학기로 매핑하세요.\n` : ''}이미지에 [1학년], [2학년], [3학년] 제목만 보이면 detected_year에 해당 학년을 반환하세요. 세특, 행동특성, 출결 등 불필요한 섹션은 모두 무시하고 오직 1~3학년 성적표 테이블 데이터만 JSON으로 추출하세요. 석차등급이 비어 있거나 P이거나 1~9 숫자가 아닌 행은 반환하지 마세요. 빈칸에 가짜 숫자를 넣지 마세요.
+${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없음'}\n위 목록에 없는 누락 행만 찾아서 반환하세요. 특히 표 상단/하단/페이지가 넘어가는 부분을 다시 확인하세요.` : '\n전체 표를 행 단위로 처음부터 끝까지 훑고 누락 없이 반환하세요.'}`,
                   },
                   {
                     inlineData: { mimeType: optimizedContent.mimeType, data: optimizedContent.data },
@@ -980,6 +994,7 @@ export default function App() {
                 ],
               },
             ],
+            model: 'gemini-2.5-flash',
             systemInstruction: {
               parts: [
                 {
@@ -1068,7 +1083,7 @@ export default function App() {
 
       setGrades((previous) => {
         const repairedGrades = repairSemesterSequence(extractedGrades);
-        const isInitialDummy = previous.length === 2 && previous[0].id === 1 && previous[1].id === 2;
+        const isInitialDummy = isInitialSampleGrades(previous);
         if (isInitialDummy) return repairedGrades;
 
         const existingKeys = new Set(previous.map((grade) => `${grade.semester}-${grade.name}`));

@@ -1,7 +1,7 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const parseModelList = () => {
-  const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const parseModelList = (requestedModel) => {
+  const primaryModel = requestedModel || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const fallbackModels = String(process.env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash-lite,gemini-2.0-flash')
     .split(',')
     .map((model) => model.trim())
@@ -57,7 +57,7 @@ export default async function handler(req, res) {
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
-  const models = parseModelList();
+  const models = parseModelList(req.body?.model);
 
   if (!apiKey) {
     return res.status(500).json({ error: { message: 'GEMINI_API_KEY environment variable is not set.' } });
