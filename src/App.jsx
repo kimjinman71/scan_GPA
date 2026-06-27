@@ -185,6 +185,34 @@ const CHART_COLORS = [
 ];
 
 const MAX_GEMINI_INLINE_DATA_CHARS = 3_600_000;
+const SAVED_AUTH_SETTINGS_KEY = 'ipsisketch-auth-settings';
+
+const getSavedAuthSettings = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVED_AUTH_SETTINGS_KEY) || '{}');
+    return saved?.remember
+      ? {
+          remember: true,
+          password: saved.password || '',
+          apiKey: saved.apiKey || '',
+        }
+      : { remember: false, password: '', apiKey: '' };
+  } catch {
+    return { remember: false, password: '', apiKey: '' };
+  }
+};
+
+const saveAuthSettings = ({ remember, password, apiKey }) => {
+  try {
+    if (remember) {
+      localStorage.setItem(SAVED_AUTH_SETTINGS_KEY, JSON.stringify({ remember, password, apiKey }));
+    } else {
+      localStorage.removeItem(SAVED_AUTH_SETTINGS_KEY);
+    }
+  } catch {
+    // 저장 기능은 선택 사항이므로 브라우저 저장소가 막혀도 인증 흐름은 계속 유지합니다.
+  }
+};
 const IMAGE_TARGET_WIDTH = 1500;
 const IMAGE_MIN_WIDTH = 1200;
 const IMAGE_JPEG_QUALITY = 0.68;
@@ -901,9 +929,11 @@ function UniversityChart({ userGrade, data, title, isFiveGrade }) {
 }
 
 export default function App() {
+  const savedAuthSettings = useMemo(() => getSavedAuthSettings(), []);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
-  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState(savedAuthSettings.password);
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState(savedAuthSettings.apiKey);
+  const [rememberAuthInputs, setRememberAuthInputs] = useState(savedAuthSettings.remember);
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [grades, setGrades] = useState(sampleGrades);
@@ -930,12 +960,14 @@ export default function App() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || '인증 서버 응답 실패');
       if (result.ok) {
+        saveAuthSettings({ remember: rememberAuthInputs, password: passwordInput, apiKey: geminiApiKeyInput });
         setIsAuthenticated(true);
       } else {
         setAuthError('유효하지 않은 보안 코드입니다. 전문가용 코드를 확인해 주세요.');
       }
     } catch (error) {
       if (import.meta.env.DEV && ['0000', '8405'].includes(passwordInput.trim().toLowerCase())) {
+        saveAuthSettings({ remember: rememberAuthInputs, password: passwordInput, apiKey: geminiApiKeyInput });
         setIsAuthenticated(true);
       } else {
         setAuthError(error.message || '인증 처리 중 오류가 발생했습니다.');
@@ -1283,6 +1315,15 @@ ${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없�
                 className="w-full border-none bg-[#f1f5f9] py-3.5 pl-12 pr-4 font-bold text-slate-800 transition-all placeholder:text-slate-300 focus:ring-2 focus:ring-blue-500"
               />
             </div>
+            <label className="flex items-center justify-center gap-2 text-[11px] font-bold text-slate-500">
+              <input
+                type="checkbox"
+                checked={rememberAuthInputs}
+                onChange={(event) => setRememberAuthInputs(event.target.checked)}
+                className="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              보안 코드와 API 키 저장
+            </label>
             {authError && <p className="text-[11px] font-bold text-red-500">{authError}</p>}
             <button
               type="submit"
