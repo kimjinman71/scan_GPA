@@ -903,6 +903,7 @@ function UniversityChart({ userGrade, data, title, isFiveGrade }) {
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('');
   const [authError, setAuthError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [grades, setGrades] = useState(sampleGrades);
@@ -997,6 +998,7 @@ ${continuationMode ? '이미 추출된 행 목록과 비교하여 누락된 성�
           });
 
           const payload = {
+            apiKey: geminiApiKeyInput.trim(),
             contents: [
               {
                 role: 'user',
@@ -1268,6 +1270,16 @@ ${continuationMode ? `\n[이미 추출된 행]\n${existingRowsForPrompt || '없�
                 value={passwordInput}
                 onChange={(event) => setPasswordInput(event.target.value)}
                 placeholder="보안 코드 입력"
+                className="w-full border-none bg-[#f1f5f9] py-3.5 pl-12 pr-4 font-bold text-slate-800 transition-all placeholder:text-slate-300 focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="relative">
+              <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
+              <input
+                type="password"
+                value={geminiApiKeyInput}
+                onChange={(event) => setGeminiApiKeyInput(event.target.value)}
+                placeholder="Gemini API Key"
                 className="w-full border-none bg-[#f1f5f9] py-3.5 pl-12 pr-4 font-bold text-slate-800 transition-all placeholder:text-slate-300 focus:ring-2 focus:ring-blue-500"
               />
             </div>

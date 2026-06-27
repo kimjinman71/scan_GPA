@@ -56,14 +56,15 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, message: 'Method not allowed' });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = String(req.body?.apiKey || process.env.GEMINI_API_KEY || '').trim();
   const models = parseModelList(req.body?.model);
 
   if (!apiKey) {
     return res.status(500).json({ error: { message: 'GEMINI_API_KEY environment variable is not set.' } });
   }
 
-  const body = JSON.stringify(req.body);
+  const { apiKey: _apiKey, ...geminiPayload } = req.body || {};
+  const body = JSON.stringify(geminiPayload);
   const errors = [];
 
   try {
